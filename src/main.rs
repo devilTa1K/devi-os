@@ -4,6 +4,7 @@
 
 use core::panic::PanicInfo;
 
+mod gdt;
 mod interrupts;
 
 const VGA: *mut u8 = 0xb8000 as *mut u8;
@@ -77,10 +78,13 @@ fn draw_logo() {
 pub extern "C" fn _start() -> ! {
     clear_screen();
     draw_logo();
+    gdt::init();
     interrupts::init_idt();
     put_str(17, 26, b"IDT loaded. Triggering breakpoint...", GRAY);
     x86_64::instructions::interrupts::int3();
     put_str(19, 26, b"Kernel survived the exception!", WHITE);
+    put_str(20, 26, b"Triggering double fault...", GRAY);
+    unsafe { (0xdeadbeef as *mut u8).write_volatile(42); }
     put_str(16, 26, b"DevilTalk OS v0.1 - booted!", WHITE);
     loop {}
 }
@@ -89,4 +93,5 @@ pub extern "C" fn _start() -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
 
