@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
 
 use core::panic::PanicInfo;
+
+mod interrupts;
 
 const VGA: *mut u8 = 0xb8000 as *mut u8;
 const COLS: usize = 80;
@@ -74,6 +77,10 @@ fn draw_logo() {
 pub extern "C" fn _start() -> ! {
     clear_screen();
     draw_logo();
+    interrupts::init_idt();
+    put_str(17, 26, b"IDT loaded. Triggering breakpoint...", GRAY);
+    x86_64::instructions::interrupts::int3();
+    put_str(19, 26, b"Kernel survived the exception!", WHITE);
     put_str(16, 26, b"DevilTalk OS v0.1 - booted!", WHITE);
     loop {}
 }
@@ -82,3 +89,4 @@ pub extern "C" fn _start() -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
