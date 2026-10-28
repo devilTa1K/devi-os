@@ -2,11 +2,16 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+use bootloader::bootinfo::MemoryRegionType;
+use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use x86_64::structures::paging::{OffsetPageTable, Translate};
+use x86_64::VirtAddr;
 
 mod gdt;
 mod interrupts;
+mod memory;
 
 const VGA: *mut u8 = 0xb8000 as *mut u8;
 const COLS: usize = 80;
@@ -55,6 +60,25 @@ fn put_num(row: usize, col: usize, mut n: u64, color: u8) {
         n /= 10;
     }
     put_str(row, col, &digits, color);
+}
+
+/// Print n as 0x... and pad with spaces up to `width` characters.
+fn put_hex(row: usize, col: usize, n: u64, color: u8, width: usize) {
+    let mut buf = [b' '; 20];
+    buf[0] = b'0';
+    buf[1] = b'x';
+    let mut idx = 2;
+    let mut started = false;
+    for shift in (0..16).rev() {
+        let nib = ((n >> (shift * 4)) & 0xF) as u8;
+        if nib != 0 || started || shift == 0 {
+            started = true;
+            buf[idx] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+            idx += 1;
+        }
+    }
+    let w = if width > buf.len() { buf.len() } else { width };
+    put_str(row, col, &buf[..w], color);
 }
 
 fn clear_screen() {
@@ -120,8 +144,44 @@ fn typed_char(c: char) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() -> ! {
+fn show_translation(row: usize, label: &[u8], addr: VirtAddr, mapper: &OffsetPageTable) {
+    put_str(row, 54, label, GRAY);
+    match mapper.translate_addr(addr) {
+        Some(phys) => put_hex(row, 66, phys.as_u64(), CYAN, 13),
+        None => put_str(row, 66, b"unmapped    ", RED),
+    }
+}
+
+fn show_memory_panel(boot_info: &'static BootInfo) {
+    let phys_offset = VirtAddr::new(boot_info.physical_memory_offset);
+
+    // SAFETY: the bootloader mapped all physical memory at this offset
+    // (map_physical_memory feature), and we call init exactly once.
+    let mapper = unsafe { memory::init(phys_offset) };
+
+    let mut usable_bytes: u64 = 0;
+    for region in boot_info.memory_map.iter() {
+        if region.region_type == MemoryRegionType::Usable {
+            usable_bytes += region.range.end_addr() - region.range.start_addr();
+        }
+    }
+
+    put_str(4, 54, b"-- MEMORY --", CYAN);
+    put_str(5, 54, b"Usable RAM:", GRAY);
+    put_num(5, 64, usable_bytes / (1024 * 1024), WHITE);
+    put_str(5, 77, b"MB", GRAY);
+    put_str(6, 54, b"Phys map at:", GRAY);
+    put_hex(7, 54, boot_info.physical_memory_offset, WHITE, 20);
+
+    put_str(9, 54, b"Translate virt->phys", CYAN);
+    show_translation(10, b"VGA 0xb8000:", VirtAddr::new(0xb8000), &mapper);
+    show_translation(11, b"Map base:", phys_offset, &mapper);
+    show_translation(12, b"0xdeadbeef:", VirtAddr::new(0xdeadbeef), &mapper);
+}
+
+entry_point!(kernel_main);
+
+fn kernel_main(boot_info: &'static BootInfo) -> ! {
     clear_screen();
     draw_logo();
     put_str(16, 26, b"DevilTalk OS v0.1 - booted!", WHITE);
@@ -131,6 +191,8 @@ pub extern "C" fn _start() -> ! {
     put_str(17, 26, b"IDT + double-fault stack ready", GRAY);
     x86_64::instructions::interrupts::int3();
     put_str(19, 26, b"Keyboard + timer online", WHITE);
+
+    show_memory_panel(boot_info);
 
     put_str(21, 2, b"Type below (Enter = clear line):", GRAY);
     put_str(INPUT_ROW, 2, b">", RED);
