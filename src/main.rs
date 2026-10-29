@@ -20,6 +20,7 @@ mod memory;
 mod scheduler;
 mod syscall;
 mod apps;
+mod audit;
 mod task;
 
 const VGA: *mut u8 = 0xb8000 as *mut u8;
@@ -132,6 +133,7 @@ fn typed_char(c: char) {
     let pos = CURSOR.load(Ordering::Relaxed);
     match c {
         '\n' => {
+            crate::audit::handle_enter(pos);
             for i in 0..INPUT_MAX {
                 put_char(INPUT_ROW, INPUT_COL + i, b' ', WHITE);
             }
@@ -269,7 +271,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     memory::install(mapper, frame_allocator);
     syscall::draw_panel();
     scheduler::init();
+    audit::init();
     apps::start();
+    scheduler::spawn(audit::monitor, syscall::CAP_ALL);
     
 
     put_str(21, 2, b"Type below (Enter = clear line):", GRAY);
@@ -293,6 +297,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
+
+
 
 
 

@@ -90,6 +90,8 @@ extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
         let n = DENIED_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         put_num(9, 17, n, RED);
         put_str(10, 15, name, RED);
+        let tid = crate::scheduler::current_id();
+        crate::audit::record_denial(tid, num);
         return DENIED;
     }
 
@@ -106,3 +108,4 @@ extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
     }
     OK
 }
+

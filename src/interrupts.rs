@@ -175,6 +175,7 @@ fn handle_fault(frame: &InterruptStackFrame, name: &[u8]) -> ! {
     }
 
     if let Some(id) = crate::scheduler::kill_current() {
+        crate::audit::record(crate::audit::KILL, id as u8, if name[0] == b'P' { 14 } else { 13 });
         let n = KILLS.fetch_add(1, Ordering::Relaxed) + 1;
         crate::put_num(24, 43, n, crate::RED);
         crate::put_str(23, 30, b"Last kill: thread ", crate::GRAY);
@@ -201,3 +202,9 @@ extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _er
     handle_fault(&stack_frame, b"GENERAL PROTECTION    ");
 }
 
+
+
+/// Timer ticks since boot (used to timestamp audit entries).
+pub fn ticks() -> u64 {
+    TICKS.load(Ordering::Relaxed)
+}

@@ -159,6 +159,7 @@ pub fn spawn_user(start: usize, end: usize, caps: u32) -> bool {
     interrupts::without_interrupts(|| {
         if let Some(s) = SCHEDULER.lock().as_mut() {
             s.threads.push(Thread { rsp: regs, caps, kstack_top: top, dead: false, _stack: kstack });
+            crate::audit::record(crate::audit::START, (s.threads.len() - 1) as u8, caps as u64);
         }
     });
     true
@@ -202,4 +203,13 @@ pub fn kill_current() -> Option<usize> {
     s.threads[id].dead = true;
     s.threads[id].caps = 0;
     Some(id)
+}
+
+
+/// Thread number of the running thread, or 255 if the scheduler is busy.
+pub fn current_id() -> usize {
+    match SCHEDULER.try_lock() {
+        Some(guard) => guard.as_ref().map(|s| s.current).unwrap_or(255),
+        None => 255,
+    }
 }
