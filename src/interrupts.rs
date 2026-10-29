@@ -4,6 +4,7 @@ use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
+use x86_64::VirtAddr;
 
 // Remap the PIC to 32..47 so IRQs don't collide with CPU exceptions (0..31).
 pub const PIC_1_OFFSET: u8 = 32;
@@ -39,7 +40,12 @@ lazy_static! {
                 .set_handler_fn(double_fault_handler)
                 .set_stack_index(crate::gdt::DOUBLE_FAULT_IST_INDEX);
         }
-        idt[InterruptIndex::Timer.as_u8()].set_handler_fn(timer_interrupt_handler);
+        // SAFETY: timer_entry is a naked function that saves and restores
+        // every register and ends with iretq, as an interrupt entry must.
+        unsafe {
+            idt[InterruptIndex::Timer.as_u8()]
+                .set_handler_addr(VirtAddr::new(timer_entry as usize as u64));
+        }
         idt[InterruptIndex::Keyboard.as_u8()].set_handler_fn(keyboard_interrupt_handler);
         idt
     };
@@ -63,13 +69,62 @@ extern "x86-interrupt" fn double_fault_handler(
     }
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+/// Timer interrupt entry. Saves all general-purpose registers, asks the
+/// scheduler which stack to run next, switches to it and returns with iretq.
+/// At the call, rsp is 16-byte aligned: the CPU aligns it, pushes 5 words
+/// (40 bytes) and we push 15 more (120 bytes), which totals 160 bytes.
+#[unsafe(naked)]
+extern "C" fn timer_entry() {
+    core::arch::naked_asm!(
+        "push rax",
+        "push rbx",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push rbp",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        "mov rdi, rsp",
+        "call {handler}",
+        "mov rsp, rax",
+        "pop r15",
+        "pop r14",
+        "pop r13",
+        "pop r12",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rbp",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rbx",
+        "pop rax",
+        "iretq",
+        handler = sym timer_handler,
+    );
+}
+
+extern "C" fn timer_handler(current_rsp: u64) -> u64 {
     let ticks = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
     crate::put_num(24, 14, ticks, crate::GRAY);
-    // SAFETY: we are ending the timer interrupt we are handling.
+
+    // SAFETY: we are ending the timer interrupt we are handling. This must
+    // happen before we switch threads, or the PIC never sends another tick.
     unsafe {
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
+
+    crate::scheduler::switch(current_rsp)
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {

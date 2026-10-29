@@ -17,6 +17,7 @@ mod allocator;
 mod gdt;
 mod interrupts;
 mod memory;
+mod scheduler;
 mod task;
 
 const VGA: *mut u8 = 0xb8000 as *mut u8;
@@ -209,6 +210,29 @@ async fn example_task() {
     put_num(20, 68, number as u64, WHITE);
 }
 
+/// Demo threads: both loop forever and never yield. They only share the
+/// CPU because the timer interrupt preempts them.
+extern "C" fn thread_a() -> ! {
+    let mut n: u64 = 0;
+    put_str(24, 30, b"Thread A:", GRAY);
+    loop {
+        n += 1;
+        if n % 100_000 == 0 {
+            put_num(24, 40, n, CYAN);
+        }
+    }
+}
+
+extern "C" fn thread_b() -> ! {
+    let mut n: u64 = 0;
+    put_str(24, 55, b"Thread B:", GRAY);
+    loop {
+        n += 1;
+        if n % 100_000 == 0 {
+            put_num(24, 65, n, RED);
+        }
+    }
+}
 entry_point!(kernel_main);
 
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
@@ -240,6 +264,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     show_heap_demo();
 
+    scheduler::init();
+    scheduler::spawn(thread_a);
+    scheduler::spawn(thread_b);
+
     put_str(21, 2, b"Type below (Enter = clear line):", GRAY);
     put_str(INPUT_ROW, 2, b">", RED);
     put_str(24, 0, b"Timer ticks:", GRAY);
@@ -261,3 +289,4 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
