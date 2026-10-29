@@ -266,10 +266,11 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     show_heap_demo();
 
+    memory::install(mapper, frame_allocator);
     syscall::draw_panel();
     scheduler::init();
-    scheduler::spawn(apps::trusted_app, syscall::CAP_PRINT);
-    scheduler::spawn(apps::untrusted_app, 0);
+    apps::start();
+    
 
     put_str(21, 2, b"Type below (Enter = clear line):", GRAY);
     put_str(INPUT_ROW, 2, b">", RED);
@@ -292,5 +293,6 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
 
 

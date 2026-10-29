@@ -1,16 +1,28 @@
+use crate::memory;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 use x86_64::registers::segmentation::{Segment, CS, SS};
 
 const STACK_SIZE: usize = 16 * 1024;
 
+// User-mode layout: each user program gets a 64 KB slot. The first page
+// holds its code, the second its stack.
+const USER_BASE: u64 = 0x5555_0000_0000;
+const USER_SLOT: u64 = 0x1_0000;
+const USER_MAX_CODE: usize = 4096;
+
+static NEXT_USER_SLOT: AtomicU64 = AtomicU64::new(0);
+
 struct Thread {
     /// Saved stack pointer; the full register state sits on that stack.
     rsp: u64,
     /// Capability bits granted to this thread when it was created.
     caps: u32,
+    /// Top of this thread's kernel stack if it runs in ring 3, else 0.
+    kstack_top: u64,
     _stack: Box<[u8]>,
 }
 
@@ -26,7 +38,13 @@ impl Scheduler {
         }
         self.threads[self.current].rsp = current_rsp;
         self.current = (self.current + 1) % self.threads.len();
-        self.threads[self.current].rsp
+        let next = &self.threads[self.current];
+        if next.kstack_top != 0 {
+            // The CPU must land on THIS thread's kernel stack the next time
+            // it arrives from ring 3.
+            crate::gdt::set_kernel_stack(next.kstack_top);
+        }
+        next.rsp
     }
 }
 
@@ -40,6 +58,7 @@ pub fn init() {
             threads: alloc::vec![Thread {
                 rsp: 0,
                 caps: crate::syscall::CAP_ALL,
+                kstack_top: 0,
                 _stack: Vec::new().into_boxed_slice(),
             }],
             current: 0,
@@ -47,8 +66,8 @@ pub fn init() {
     });
 }
 
-/// Create a thread that starts at `entry` with exactly the capabilities
-/// in `caps`. It never returns.
+/// Create a kernel (ring 0) thread. It never returns.
+#[allow(dead_code)]
 pub fn spawn(entry: extern "C" fn() -> !, caps: u32) {
     let mut stack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
     let top = (stack.as_mut_ptr() as u64 + STACK_SIZE as u64) & !0xF;
@@ -58,7 +77,6 @@ pub fn spawn(entry: extern "C" fn() -> !, caps: u32) {
     let regs = frame - 15 * 8;
 
     // SAFETY: both ranges lie inside the stack we just allocated and own.
-    // We build the state the timer entry expects to pop and iretq from.
     unsafe {
         let r = regs as *mut u64;
         for i in 0..15 {
@@ -68,15 +86,71 @@ pub fn spawn(entry: extern "C" fn() -> !, caps: u32) {
         f.add(0).write(entry as usize as u64); // RIP
         f.add(1).write(CS::get_reg().0 as u64); // CS
         f.add(2).write(0x202); // RFLAGS: interrupts enabled
-        f.add(3).write(frame); // RSP after iretq (16-byte aligned + 8)
+        f.add(3).write(frame); // RSP after iretq
         f.add(4).write(SS::get_reg().0 as u64); // SS
     }
 
     interrupts::without_interrupts(|| {
         if let Some(s) = SCHEDULER.lock().as_mut() {
-            s.threads.push(Thread { rsp: regs, caps, _stack: stack });
+            s.threads.push(Thread { rsp: regs, caps, kstack_top: 0, _stack: stack });
         }
     });
+}
+
+/// Create a user-mode (ring 3) thread from machine code in kernel memory
+/// at `start..end`. Returns false if it could not be set up.
+pub fn spawn_user(start: usize, end: usize, caps: u32) -> bool {
+    let len = end.wrapping_sub(start);
+    if len == 0 || len > USER_MAX_CODE {
+        return false;
+    }
+
+    let slot = NEXT_USER_SLOT.fetch_add(1, Ordering::Relaxed);
+    let base = USER_BASE + slot * USER_SLOT;
+
+    // Page 1: code. Page 2: stack. Both user-accessible.
+    if memory::map_user_page(base, true).is_err()
+        || memory::map_user_page(base + 0x1000, true).is_err()
+    {
+        return false;
+    }
+
+    // SAFETY: both pages were just mapped writable at `base`. We zero them
+    // first so no leftover kernel data leaks to the app, then copy the code.
+    unsafe {
+        core::ptr::write_bytes(base as *mut u8, 0, 0x2000);
+        core::ptr::copy_nonoverlapping(start as *const u8, base as *mut u8, len);
+    }
+    let user_stack_top = base + 0x2000;
+
+    // This thread's own kernel stack (used by the CPU when it arrives from
+    // ring 3). It lives on the heap, which ring 3 cannot access.
+    let mut kstack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
+    let top = (kstack.as_mut_ptr() as u64 + STACK_SIZE as u64) & !0xF;
+    let frame = top - 40;
+    let regs = frame - 15 * 8;
+
+    // SAFETY: both ranges lie inside the kernel stack we just allocated. We
+    // build a frame that makes the first iretq enter ring 3 at `base`.
+    unsafe {
+        let r = regs as *mut u64;
+        for i in 0..15 {
+            r.add(i).write(0);
+        }
+        let f = frame as *mut u64;
+        f.add(0).write(base); // RIP: start of the user code page
+        f.add(1).write(crate::gdt::user_code_selector() as u64); // CS (ring 3)
+        f.add(2).write(0x202); // RFLAGS: interrupts enabled, IOPL 0
+        f.add(3).write(user_stack_top); // RSP: top of the user stack page
+        f.add(4).write(crate::gdt::user_data_selector() as u64); // SS (ring 3)
+    }
+
+    interrupts::without_interrupts(|| {
+        if let Some(s) = SCHEDULER.lock().as_mut() {
+            s.threads.push(Thread { rsp: regs, caps, kstack_top: top, _stack: kstack });
+        }
+    });
+    true
 }
 
 /// Called from the timer interrupt. Never blocks: if the scheduler is

@@ -50,7 +50,8 @@ lazy_static! {
         // SAFETY: syscall_entry is a naked function that preserves every
         // register except rax and ends with iretq, as a gate must.
         unsafe {
-            idt[0x80u8].set_handler_addr(VirtAddr::new(crate::syscall::syscall_entry as usize as u64));
+            idt[0x80u8].set_handler_addr(VirtAddr::new(crate::syscall::syscall_entry as usize as u64))
+                .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
         }
         idt
     };
@@ -145,4 +146,5 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
     }
 }
+
 

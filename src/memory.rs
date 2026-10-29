@@ -56,3 +56,50 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
         frame
     }
 }
+
+// ---- Global memory manager and user pages (Stage 6b) ----
+use spin::Mutex;
+use x86_64::structures::paging::{Mapper, Page, PageTableFlags};
+
+struct Manager {
+    mapper: OffsetPageTable<'static>,
+    frames: BootInfoFrameAllocator,
+}
+
+static MANAGER: Mutex<Option<Manager>> = Mutex::new(None);
+
+/// Hand the mapper and frame allocator to the global manager.
+pub fn install(mapper: OffsetPageTable<'static>, frames: BootInfoFrameAllocator) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        *MANAGER.lock() = Some(Manager { mapper, frames });
+    });
+}
+
+/// Map one fresh physical frame at `addr` so that ring 3 may access it.
+/// The parent page tables also get USER_ACCESSIBLE, or the CPU would still
+/// refuse user access to the page.
+pub fn map_user_page(addr: u64, writable: bool) -> Result<(), ()> {
+    let mut guard = MANAGER.lock();
+    let m = guard.as_mut().ok_or(())?;
+
+    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(addr));
+    let frame = m.frames.allocate_frame().ok_or(())?;
+
+    let mut flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
+    if writable {
+        flags |= PageTableFlags::WRITABLE;
+    }
+    let parent_flags =
+        PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+
+    // SAFETY: the frame was just taken from the allocator, so nothing else
+    // uses it, and the page lies in the user region (PML4 slot 170), which
+    // no kernel mapping overlaps.
+    unsafe {
+        m.mapper
+            .map_to_with_table_flags(page, frame, flags, parent_flags, &mut m.frames)
+            .map_err(|_| ())?
+            .flush();
+    }
+    Ok(())
+}
