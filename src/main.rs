@@ -18,6 +18,8 @@ mod gdt;
 mod interrupts;
 mod memory;
 mod scheduler;
+mod syscall;
+mod apps;
 mod task;
 
 const VGA: *mut u8 = 0xb8000 as *mut u8;
@@ -264,9 +266,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     show_heap_demo();
 
+    syscall::draw_panel();
     scheduler::init();
-    scheduler::spawn(thread_a);
-    scheduler::spawn(thread_b);
+    scheduler::spawn(apps::trusted_app, syscall::CAP_PRINT);
+    scheduler::spawn(apps::untrusted_app, 0);
 
     put_str(21, 2, b"Type below (Enter = clear line):", GRAY);
     put_str(INPUT_ROW, 2, b">", RED);
@@ -289,4 +292,5 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
 

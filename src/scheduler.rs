@@ -9,6 +9,8 @@ const STACK_SIZE: usize = 16 * 1024;
 struct Thread {
     /// Saved stack pointer; the full register state sits on that stack.
     rsp: u64,
+    /// Capability bits granted to this thread when it was created.
+    caps: u32,
     _stack: Box<[u8]>,
 }
 
@@ -30,12 +32,14 @@ impl Scheduler {
 
 static SCHEDULER: Mutex<Option<Scheduler>> = Mutex::new(None);
 
-/// Register the code that is running right now (kernel_main) as thread 0.
+/// Register the code that is running right now (kernel_main) as thread 0,
+/// with every capability, because it is the kernel itself.
 pub fn init() {
     interrupts::without_interrupts(|| {
         *SCHEDULER.lock() = Some(Scheduler {
             threads: alloc::vec![Thread {
                 rsp: 0,
+                caps: crate::syscall::CAP_ALL,
                 _stack: Vec::new().into_boxed_slice(),
             }],
             current: 0,
@@ -43,8 +47,9 @@ pub fn init() {
     });
 }
 
-/// Create a thread that starts at `entry`. It never returns.
-pub fn spawn(entry: extern "C" fn() -> !) {
+/// Create a thread that starts at `entry` with exactly the capabilities
+/// in `caps`. It never returns.
+pub fn spawn(entry: extern "C" fn() -> !, caps: u32) {
     let mut stack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
     let top = (stack.as_mut_ptr() as u64 + STACK_SIZE as u64) & !0xF;
 
@@ -69,7 +74,7 @@ pub fn spawn(entry: extern "C" fn() -> !) {
 
     interrupts::without_interrupts(|| {
         if let Some(s) = SCHEDULER.lock().as_mut() {
-            s.threads.push(Thread { rsp: regs, _stack: stack });
+            s.threads.push(Thread { rsp: regs, caps, _stack: stack });
         }
     });
 }
@@ -83,5 +88,17 @@ pub fn switch(current_rsp: u64) -> u64 {
             None => current_rsp,
         },
         None => current_rsp,
+    }
+}
+
+/// Capabilities of the running thread. Fails closed: if the scheduler is
+/// unavailable for any reason, the answer is "no capabilities".
+pub fn current_caps() -> u32 {
+    match SCHEDULER.try_lock() {
+        Some(guard) => match guard.as_ref() {
+            Some(s) => s.threads[s.current].caps,
+            None => 0,
+        },
+        None => 0,
     }
 }
