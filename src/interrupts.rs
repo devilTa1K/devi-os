@@ -44,13 +44,13 @@ lazy_static! {
         // every register and ends with iretq, as an interrupt entry must.
         unsafe {
             idt[InterruptIndex::Timer.as_u8()]
-                .set_handler_addr(VirtAddr::new(timer_entry as usize as u64));
+                .set_handler_addr(VirtAddr::new(timer_entry as *const () as usize as u64));
         }
         idt[InterruptIndex::Keyboard.as_u8()].set_handler_fn(keyboard_interrupt_handler);
         // SAFETY: syscall_entry is a naked function that preserves every
         // register except rax and ends with iretq, as a gate must.
         unsafe {
-            idt[0x80u8].set_handler_addr(VirtAddr::new(crate::syscall::syscall_entry as usize as u64))
+            idt[0x80u8].set_handler_addr(VirtAddr::new(crate::syscall::syscall_entry as *const () as usize as u64))
                 .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
         }
         idt
@@ -146,5 +146,6 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
     }
 }
+
 
 
