@@ -33,6 +33,8 @@ lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
         idt.breakpoint.set_handler_fn(breakpoint_handler);
+        idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.general_protection_fault.set_handler_fn(gp_fault_handler);
         // SAFETY: the index must be valid in the TSS. gdt.rs puts the
         // emergency stack in exactly this slot.
         unsafe {
@@ -198,3 +200,4 @@ extern "x86-interrupt" fn page_fault_handler(
 extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) {
     handle_fault(&stack_frame, b"GENERAL PROTECTION    ");
 }
+
