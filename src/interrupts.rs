@@ -1,6 +1,5 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 use lazy_static::lazy_static;
-use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
 use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::instructions::port::Port;
@@ -74,26 +73,12 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    lazy_static! {
-        static ref KEYBOARD: Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>> =
-            Mutex::new(Keyboard::new(
-                ScancodeSet1::new(),
-                layouts::Us104Key,
-                HandleControl::Ignore
-            ));
-    }
-
-    let mut keyboard = KEYBOARD.lock();
     let mut port = Port::new(0x60);
-    // SAFETY: 0x60 is the PS/2 controller data port. Reading it is how the
-    // keyboard scancode is fetched, and it must be read to clear the interrupt.
+    // SAFETY: 0x60 is the PS/2 controller data port. Reading it fetches the
+    // scancode and clears the interrupt. We only queue it; the keyboard
+    // task does the decoding.
     let scancode: u8 = unsafe { port.read() };
-
-    if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-        if let Some(DecodedKey::Unicode(c)) = keyboard.process_keyevent(key_event) {
-            crate::typed_char(c);
-        }
-    }
+    crate::task::keyboard::add_scancode(scancode);
 
     // SAFETY: we are ending the keyboard interrupt we are handling.
     unsafe {

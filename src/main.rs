@@ -17,6 +17,7 @@ mod allocator;
 mod gdt;
 mod interrupts;
 mod memory;
+mod task;
 
 const VGA: *mut u8 = 0xb8000 as *mut u8;
 const COLS: usize = 80;
@@ -122,7 +123,7 @@ fn draw_logo() {
     put_str(13, 32, b"SECURE BY DESIGN", GRAY);
 }
 
-/// Called by the keyboard interrupt handler for every decoded character.
+/// Called by the keyboard task for every decoded character.
 /// Untrusted input: accept only printable ASCII and cap the line length.
 fn typed_char(c: char) {
     let pos = CURSOR.load(Ordering::Relaxed);
@@ -196,6 +197,18 @@ fn show_heap_demo() {
     put_num(16, 64, sum, WHITE);
 }
 
+async fn async_number() -> u32 {
+    42
+}
+
+/// A first task: awaits another async function and shows the result.
+async fn example_task() {
+    let number = async_number().await;
+    put_str(19, 54, b"-- ASYNC TASK --", CYAN);
+    put_str(20, 54, b"async result:", GRAY);
+    put_num(20, 68, number as u64, WHITE);
+}
+
 entry_point!(kernel_main);
 
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
@@ -238,9 +251,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     x86_64::instructions::interrupts::enable();
 
-    loop {
-        x86_64::instructions::hlt();
-    }
+    let mut executor = task::executor::Executor::new();
+    executor.spawn(task::Task::new(example_task()));
+    executor.spawn(task::Task::new(task::keyboard::print_keypresses()));
+    executor.run()
 }
 
 #[panic_handler]
