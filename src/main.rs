@@ -2,6 +2,10 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+extern crate alloc;
+
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 use bootloader::bootinfo::MemoryRegionType;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
@@ -9,6 +13,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use x86_64::structures::paging::{OffsetPageTable, Translate};
 use x86_64::VirtAddr;
 
+mod allocator;
 mod gdt;
 mod interrupts;
 mod memory;
@@ -152,12 +157,8 @@ fn show_translation(row: usize, label: &[u8], addr: VirtAddr, mapper: &OffsetPag
     }
 }
 
-fn show_memory_panel(boot_info: &'static BootInfo) {
+fn show_memory_panel(boot_info: &'static BootInfo, mapper: &OffsetPageTable) {
     let phys_offset = VirtAddr::new(boot_info.physical_memory_offset);
-
-    // SAFETY: the bootloader mapped all physical memory at this offset
-    // (map_physical_memory feature), and we call init exactly once.
-    let mapper = unsafe { memory::init(phys_offset) };
 
     let mut usable_bytes: u64 = 0;
     for region in boot_info.memory_map.iter() {
@@ -174,9 +175,25 @@ fn show_memory_panel(boot_info: &'static BootInfo) {
     put_hex(7, 54, boot_info.physical_memory_offset, WHITE, 20);
 
     put_str(9, 54, b"Translate virt->phys", CYAN);
-    show_translation(10, b"VGA 0xb8000:", VirtAddr::new(0xb8000), &mapper);
-    show_translation(11, b"Map base:", phys_offset, &mapper);
-    show_translation(12, b"0xdeadbeef:", VirtAddr::new(0xdeadbeef), &mapper);
+    show_translation(10, b"VGA 0xb8000:", VirtAddr::new(0xb8000), mapper);
+    show_translation(11, b"Map base:", phys_offset, mapper);
+    show_translation(12, b"0xdeadbeef:", VirtAddr::new(0xdeadbeef), mapper);
+}
+
+/// Proves the heap works: allocate a Box and a Vec, use them, drop them.
+fn show_heap_demo() {
+    let boxed = Box::new(41u64);
+    let mut numbers: Vec<u64> = Vec::new();
+    for i in 1..=10 {
+        numbers.push(i);
+    }
+    let sum: u64 = numbers.iter().sum();
+
+    put_str(14, 54, b"-- HEAP (100 KB) --", CYAN);
+    put_str(15, 54, b"Box<u64>:", GRAY);
+    put_num(15, 64, *boxed + 1, WHITE);
+    put_str(16, 54, b"Vec sum:", GRAY);
+    put_num(16, 64, sum, WHITE);
 }
 
 entry_point!(kernel_main);
@@ -192,7 +209,23 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     x86_64::instructions::interrupts::int3();
     put_str(19, 26, b"Keyboard + timer online", WHITE);
 
-    show_memory_panel(boot_info);
+    let phys_offset = VirtAddr::new(boot_info.physical_memory_offset);
+    // SAFETY: the bootloader mapped all physical memory at this offset
+    // (map_physical_memory feature), and we call init exactly once.
+    let mut mapper = unsafe { memory::init(phys_offset) };
+    show_memory_panel(boot_info, &mapper);
+
+    // SAFETY: the memory map comes straight from the bootloader.
+    let mut frame_allocator =
+        unsafe { memory::BootInfoFrameAllocator::init(&boot_info.memory_map) };
+
+    if allocator::init_heap(&mut mapper, &mut frame_allocator).is_err() {
+        put_str(14, 54, b"HEAP INIT FAILED", RED);
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
+    show_heap_demo();
 
     put_str(21, 2, b"Type below (Enter = clear line):", GRAY);
     put_str(INPUT_ROW, 2, b">", RED);
