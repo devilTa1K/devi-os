@@ -17,7 +17,7 @@ lazy_static! {
 
             // SAFETY: we only take the address of the static, never read or
             // write it here. The CPU uses it as an emergency stack.
-            let stack_start = VirtAddr::from_ptr(unsafe { &raw const STACK });
+            let stack_start = VirtAddr::from_ptr(&raw const STACK);
             // Stacks grow downward, so the CPU needs the END address.
             stack_start + STACK_SIZE as u64
         };
