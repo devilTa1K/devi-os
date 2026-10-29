@@ -23,6 +23,8 @@ struct Thread {
     caps: u32,
     /// Top of this thread's kernel stack if it runs in ring 3, else 0.
     kstack_top: u64,
+    /// Killed after a fault. The scheduler never runs a dead thread again.
+    dead: bool,
     _stack: Box<[u8]>,
 }
 
@@ -33,11 +35,19 @@ struct Scheduler {
 
 impl Scheduler {
     fn switch(&mut self, current_rsp: u64) -> u64 {
-        if self.threads.len() < 2 {
+        let n = self.threads.len();
+        if n < 2 {
             return current_rsp;
         }
         self.threads[self.current].rsp = current_rsp;
-        self.current = (self.current + 1) % self.threads.len();
+        // Round-robin, skipping dead threads. Thread 0 (the kernel) is
+        // never dead, so this always finds a live thread.
+        for _ in 0..n {
+            self.current = (self.current + 1) % n;
+            if !self.threads[self.current].dead {
+                break;
+            }
+        }
         let next = &self.threads[self.current];
         if next.kstack_top != 0 {
             // The CPU must land on THIS thread's kernel stack the next time
@@ -59,6 +69,7 @@ pub fn init() {
                 rsp: 0,
                 caps: crate::syscall::CAP_ALL,
                 kstack_top: 0,
+                dead: false,
                 _stack: Vec::new().into_boxed_slice(),
             }],
             current: 0,
@@ -92,7 +103,7 @@ pub fn spawn(entry: extern "C" fn() -> !, caps: u32) {
 
     interrupts::without_interrupts(|| {
         if let Some(s) = SCHEDULER.lock().as_mut() {
-            s.threads.push(Thread { rsp: regs, caps, kstack_top: 0, _stack: stack });
+            s.threads.push(Thread { rsp: regs, caps, kstack_top: 0, dead: false, _stack: stack });
         }
     });
 }
@@ -147,7 +158,7 @@ pub fn spawn_user(start: usize, end: usize, caps: u32) -> bool {
 
     interrupts::without_interrupts(|| {
         if let Some(s) = SCHEDULER.lock().as_mut() {
-            s.threads.push(Thread { rsp: regs, caps, kstack_top: top, _stack: kstack });
+            s.threads.push(Thread { rsp: regs, caps, kstack_top: top, dead: false, _stack: kstack });
         }
     });
     true
@@ -175,4 +186,20 @@ pub fn current_caps() -> u32 {
         },
         None => 0,
     }
+}
+
+/// Mark the running user thread dead and strip its capabilities. Returns its
+/// thread number. Called from a fault handler, where interrupts are already
+/// off, so taking the lock cannot deadlock. The kernel (thread 0) is never
+/// killed.
+pub fn kill_current() -> Option<usize> {
+    let mut guard = SCHEDULER.lock();
+    let s = guard.as_mut()?;
+    if s.current == 0 {
+        return None;
+    }
+    let id = s.current;
+    s.threads[id].dead = true;
+    s.threads[id].caps = 0;
+    Some(id)
 }

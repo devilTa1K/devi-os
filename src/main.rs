@@ -193,7 +193,7 @@ fn show_heap_demo() {
     }
     let sum: u64 = numbers.iter().sum();
 
-    put_str(14, 54, b"-- HEAP (100 KB) --", CYAN);
+    put_str(14, 54, b"-- HEAP (200 KB) --", CYAN);
     put_str(15, 54, b"Box<u64>:", GRAY);
     put_num(15, 64, *boxed + 1, WHITE);
     put_str(16, 54, b"Vec sum:", GRAY);
@@ -293,6 +293,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
 
 
 

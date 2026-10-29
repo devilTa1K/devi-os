@@ -149,3 +149,52 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 
 
 
+
+// ---- Stage 6c: a fault in ring 3 kills only the offending thread ----
+
+static KILLS: AtomicU64 = AtomicU64::new(0);
+
+/// True if the fault came from ring 3 (an app), false if from ring 0.
+fn came_from_ring3(frame: &InterruptStackFrame) -> bool {
+    // SAFETY: InterruptStackFrame is a transparent wrapper around the
+    // 5-word frame the CPU pushed: [rip, cs, rflags, rsp, ss]. Word 1 is CS,
+    // and its low two bits are the privilege level the fault came from.
+    let cs = unsafe { core::ptr::read_volatile((frame as *const InterruptStackFrame as *const u64).add(1)) };
+    cs & 3 == 3
+}
+
+fn handle_fault(frame: &InterruptStackFrame, name: &[u8]) -> ! {
+    if !came_from_ring3(frame) {
+        // A fault inside the kernel is a kernel bug. Do not continue.
+        crate::put_str(21, 54, b"KERNEL FAULT - HALTED", crate::RED);
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
+
+    if let Some(id) = crate::scheduler::kill_current() {
+        let n = KILLS.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::put_num(24, 43, n, crate::RED);
+        crate::put_str(23, 30, b"Last kill: thread ", crate::GRAY);
+        crate::put_char(23, 48, b'0' + (id % 10) as u8, crate::WHITE);
+        crate::put_str(23, 50, name, crate::RED);
+    }
+
+    // The thread is marked dead. Let the timer interrupt preempt this
+    // handler; the scheduler will never run the dead thread again.
+    x86_64::instructions::interrupts::enable();
+    loop {
+        x86_64::instructions::hlt();
+    }
+}
+
+extern "x86-interrupt" fn page_fault_handler(
+    stack_frame: InterruptStackFrame,
+    _error_code: x86_64::structures::idt::PageFaultErrorCode,
+) {
+    handle_fault(&stack_frame, b"PAGE FAULT (memory)   ");
+}
+
+extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) {
+    handle_fault(&stack_frame, b"GENERAL PROTECTION    ");
+}
