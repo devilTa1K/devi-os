@@ -5,6 +5,7 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 pub const CAP_PRINT: u32 = 1 << 0;
 pub const CAP_NETWORK: u32 = 1 << 1;
 pub const CAP_FILES: u32 = 1 << 2;
+pub const CAP_SECRET: u32 = 1 << 3;
 pub const CAP_ALL: u32 = u32::MAX;
 
 // Syscall numbers (in rax). The argument goes in rdi.
@@ -79,7 +80,7 @@ extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
     let (needed, name): (u32, &[u8; 8]) = match num {
         SYS_PRINT => (CAP_PRINT, b"PRINT   "),
         SYS_NETWORK => (CAP_NETWORK, b"NETWORK "),
-        SYS_FILES => (CAP_FILES, b"FILES   "),
+        SYS_FILES => (crate::fs::required_cap(arg), b"FILES   "),
         _ => return UNKNOWN,
     };
 
@@ -92,11 +93,17 @@ extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
         put_str(10, 15, name, RED);
         let tid = crate::scheduler::current_id();
         crate::audit::record_denial(tid, num);
+        if num == SYS_FILES {
+            crate::fs::note_denied(tid, arg);
+        }
         return DENIED;
     }
 
     let n = ALLOWED_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     put_num(8, 17, n, WHITE);
+    if num == SYS_FILES {
+        return crate::fs::read(crate::scheduler::current_id(), arg);
+    }
 
     if num == SYS_PRINT {
         // Validate the untrusted argument: printable ASCII only.
@@ -108,4 +115,8 @@ extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
     }
     OK
 }
+
+
+
+
 

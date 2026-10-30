@@ -106,3 +106,41 @@ pub fn start() {
         put_str(13, 2, b"USER APP SPAWN FAILED", RED);
     }
 }
+
+core::arch::global_asm!(r#"
+    .text
+
+    .global user_prog_e_start
+    .global user_prog_e_end
+user_prog_e_start:
+    xor rbx, rbx
+.Le_loop:
+    mov rax, 3
+    mov rdi, rbx
+    int 0x80
+    inc rbx
+    cmp rbx, 3
+    jne .Le_wait
+    xor rbx, rbx
+.Le_wait:
+    mov rcx, 5000000
+.Le_delay:
+    dec rcx
+    jnz .Le_delay
+    jmp .Le_loop
+user_prog_e_end:
+"#);
+
+unsafe extern "C" {
+    static user_prog_e_start: u8;
+    static user_prog_e_end: u8;
+}
+
+/// App E: holds FILES but not SECRET, and reads files 0, 1, 2 in turn.
+pub fn start_file_app() {
+    let e0 = (&raw const user_prog_e_start) as usize;
+    let e1 = (&raw const user_prog_e_end) as usize;
+    if !spawn_user(e0, e1, crate::syscall::CAP_FILES) {
+        put_str(12, 2, b"FILE APP SPAWN FAILED", RED);
+    }
+}

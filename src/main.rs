@@ -21,6 +21,7 @@ mod scheduler;
 mod syscall;
 mod apps;
 mod audit;
+mod fs;
 mod task;
 
 const VGA: *mut u8 = 0xb8000 as *mut u8;
@@ -266,13 +267,14 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
             x86_64::instructions::hlt();
         }
     }
-    show_heap_demo();
+    fs::init();
 
     memory::install(mapper, frame_allocator);
     syscall::draw_panel();
     scheduler::init();
     audit::init();
     apps::start();
+    apps::start_file_app();
     scheduler::spawn(audit::monitor, syscall::CAP_ALL);
     
 
@@ -288,7 +290,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     x86_64::instructions::interrupts::enable();
 
     let mut executor = task::executor::Executor::new();
-    executor.spawn(task::Task::new(example_task()));
+    
     executor.spawn(task::Task::new(task::keyboard::print_keypresses()));
     executor.run()
 }
@@ -297,6 +299,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
+
+
+
 
 
 
