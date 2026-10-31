@@ -149,6 +149,8 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (DENY, 3) => b"FILES   ",
         (KILL, 14) => b"PGFAULT ",
         (KILL, 13) => b"GPFAULT ",
+        (KILL, 15) => b"NXFAULT ",
+        (KILL, 16) => b"WRFAULT ",
         (START, _) => b"RING 3  ",
         (BOOT, _) => b"        ",
         (GRANT, _) => b"SECRET  ",
@@ -306,6 +308,7 @@ pub fn newest_line(n: usize) -> Option<([u8; 22], bool)> {
         Some((buf, e.kind == DENY || e.kind == KILL))
     })
 }
+
 
 
 

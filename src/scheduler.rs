@@ -134,6 +134,14 @@ pub fn spawn_user(start: usize, end: usize, caps: u32) -> bool {
     }
     let user_stack_top = base + 0x2000;
 
+    // W^X: the code page is readable and executable but not writable; the
+    // stack page is writable but not executable.
+    if memory::protect_user_page(base, false, true).is_err()
+        || memory::protect_user_page(base + 0x1000, true, false).is_err()
+    {
+        return false;
+    }
+
     // This thread's own kernel stack (used by the CPU when it arrives from
     // ring 3). It lives on the heap, which ring 3 cannot access.
     let mut kstack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
@@ -213,3 +221,4 @@ pub fn current_id() -> usize {
         None => 255,
     }
 }
+

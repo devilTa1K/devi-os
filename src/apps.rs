@@ -144,3 +144,54 @@ pub fn start_file_app() {
         put_str(12, 2, b"FILE APP SPAWN FAILED", RED);
     }
 }
+
+core::arch::global_asm!(r#"
+    .text
+
+    .global user_prog_f_start
+    .global user_prog_f_end
+user_prog_f_start:
+    mov rcx, 900000000
+.Lf_delay:
+    dec rcx
+    jnz .Lf_delay
+    lea rax, [rip + user_prog_f_start]
+    mov byte ptr [rax], 0x90
+.Lf_never:
+    jmp .Lf_never
+user_prog_f_end:
+
+    .global user_prog_g_start
+    .global user_prog_g_end
+user_prog_g_start:
+    mov rcx, 1200000000
+.Lg_delay:
+    dec rcx
+    jnz .Lg_delay
+    mov byte ptr [rsp - 8], 0xc3
+    lea rax, [rsp - 8]
+    jmp rax
+user_prog_g_end:
+"#);
+
+unsafe extern "C" {
+    static user_prog_f_start: u8;
+    static user_prog_f_end: u8;
+    static user_prog_g_start: u8;
+    static user_prog_g_end: u8;
+}
+
+/// App F overwrites its own code (blocked by read-only code pages).
+/// App G jumps into its own stack (blocked by NX). Neither holds capabilities.
+pub fn start_hardening_demo() {
+    let f0 = (&raw const user_prog_f_start) as usize;
+    let f1 = (&raw const user_prog_f_end) as usize;
+    let g0 = (&raw const user_prog_g_start) as usize;
+    let g1 = (&raw const user_prog_g_end) as usize;
+
+    let ok_f = spawn_user(f0, f1, 0);
+    let ok_g = spawn_user(g0, g1, 0);
+    if !(ok_f && ok_g) {
+        put_str(24, 55, b"HARDENING APPS FAILED", RED);
+    }
+}

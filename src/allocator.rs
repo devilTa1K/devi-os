@@ -5,7 +5,7 @@ use x86_64::structures::paging::{
 use x86_64::VirtAddr;
 
 pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 200 * 1024;
+pub const HEAP_SIZE: usize = 256 * 1024;
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
@@ -28,7 +28,7 @@ pub fn init_heap(
         let frame = frame_allocator
             .allocate_frame()
             .ok_or(MapToError::FrameAllocationFailed)?;
-        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_EXECUTE;
         // SAFETY: the frame was just taken from the allocator, so nothing
         // else uses it, and the page lies in our own heap range.
         unsafe { mapper.map_to(page, frame, flags, frame_allocator)?.flush() };
@@ -40,4 +40,6 @@ pub fn init_heap(
     }
     Ok(())
 }
+
+
 

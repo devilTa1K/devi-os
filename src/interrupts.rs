@@ -175,7 +175,7 @@ fn handle_fault(frame: &InterruptStackFrame, name: &[u8]) -> ! {
     }
 
     if let Some(id) = crate::scheduler::kill_current() {
-        crate::audit::record(crate::audit::KILL, id as u8, if name[0] == b'P' { 14 } else { 13 });
+        crate::audit::record(crate::audit::KILL, id as u8, match name[0] { b'G' => 13, b'N' => 15, b'W' => 16, _ => 14 });
         let n = KILLS.fetch_add(1, Ordering::Relaxed) + 1;
         crate::put_num(24, 43, n, crate::RED);
         crate::put_str(23, 30, b"Last kill: thread ", crate::GRAY);
@@ -193,9 +193,17 @@ fn handle_fault(frame: &InterruptStackFrame, name: &[u8]) -> ! {
 
 extern "x86-interrupt" fn page_fault_handler(
     stack_frame: InterruptStackFrame,
-    _error_code: x86_64::structures::idt::PageFaultErrorCode,
+    error_code: x86_64::structures::idt::PageFaultErrorCode,
 ) {
-    handle_fault(&stack_frame, b"PAGE FAULT (memory)   ");
+    use x86_64::structures::idt::PageFaultErrorCode as E;
+    let name: &[u8] = if error_code.contains(E::INSTRUCTION_FETCH) {
+        b"NX VIOLATION (exec)   "
+    } else if error_code.contains(E::CAUSED_BY_WRITE) && error_code.contains(E::PROTECTION_VIOLATION) {
+        b"WRITE DENIED (RO)     "
+    } else {
+        b"PAGE FAULT (memory)   "
+    };
+    handle_fault(&stack_frame, name);
 }
 
 extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) {
@@ -208,3 +216,6 @@ extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _er
 pub fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
+
+
+

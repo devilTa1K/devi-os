@@ -65,6 +65,10 @@ pub fn init() {
     put_str(2, 2, b"Shell commands: help ls cat log caps", CYAN);
     put_str(21, 2, b"Shell: type help, then press Enter", GRAY);
     clear_output();
+    put_char(17, 53, b' ', GRAY);
+    for c in 53..=56 {
+        put_char(18, c, b' ', GRAY);
+    }
     out(b"shell ready. try: help", GREEN);
     let g = INPUT.lock();
     draw_input(&g.0, g.1);
@@ -246,3 +250,4 @@ fn change_cap(arg: &[u8], grant: bool) {
     }
     out(b"(logged to audit)", GRAY);
 }
+

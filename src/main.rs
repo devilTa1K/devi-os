@@ -246,6 +246,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     draw_logo();
     put_str(16, 26, b"DevilTalk OS v0.1 - booted!", WHITE);
 
+    let nx = memory::enable_nx();
     gdt::init();
     interrupts::init_idt();
     put_str(17, 26, b"IDT + double-fault stack ready", GRAY);
@@ -271,11 +272,18 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     fs::init();
 
     memory::install(mapper, frame_allocator);
+    let hardening: &[u8] = if nx {
+        b"Hardening: NX on, user code read-only"
+    } else {
+        b"Hardening: NX FAILED"
+    };
+    put_str(3, 2, hardening, CYAN);
     syscall::draw_panel();
     scheduler::init();
     audit::init();
     apps::start();
     apps::start_file_app();
+    apps::start_hardening_demo();
     scheduler::spawn(audit::monitor, syscall::CAP_ALL);
     
 
@@ -301,6 +309,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
+
+
 
 
 

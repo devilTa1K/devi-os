@@ -103,3 +103,37 @@ pub fn map_user_page(addr: u64, writable: bool) -> Result<(), ()> {
     }
     Ok(())
 }
+
+/// Turn on the no-execute bit. Must run before any page table entry uses
+/// NO_EXECUTE, or the CPU treats that bit as reserved and faults.
+pub fn enable_nx() -> bool {
+    use x86_64::registers::model_specific::{Efer, EferFlags};
+    // SAFETY: setting NXE only changes how the NO_EXECUTE page-table bit is
+    // interpreted. We set it at the start of boot, before any page uses it.
+    unsafe {
+        Efer::update(|f| *f |= EferFlags::NO_EXECUTE_ENABLE);
+    }
+    Efer::read().contains(EferFlags::NO_EXECUTE_ENABLE)
+}
+
+/// Change the permissions of an already-mapped user page.
+pub fn protect_user_page(addr: u64, writable: bool, executable: bool) -> Result<(), ()> {
+    let mut guard = MANAGER.lock();
+    let m = guard.as_mut().ok_or(())?;
+    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(addr));
+
+    let mut flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
+    if writable {
+        flags |= PageTableFlags::WRITABLE;
+    }
+    if !executable {
+        flags |= PageTableFlags::NO_EXECUTE;
+    }
+
+    // SAFETY: the page is one we mapped in map_user_page, so changing only
+    // its permission bits cannot break another mapping.
+    unsafe {
+        m.mapper.update_flags(page, flags).map_err(|_| ())?.flush();
+    }
+    Ok(())
+}
