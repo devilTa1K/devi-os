@@ -22,6 +22,7 @@ mod syscall;
 mod apps;
 mod audit;
 mod fs;
+mod shell;
 mod task;
 
 const VGA: *mut u8 = 0xb8000 as *mut u8;
@@ -291,6 +292,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     let mut executor = task::executor::Executor::new();
     
+    shell::init();
     executor.spawn(task::Task::new(task::keyboard::print_keypresses()));
     executor.run()
 }
@@ -299,6 +301,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
+
 
 
 

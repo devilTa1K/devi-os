@@ -63,3 +63,32 @@ pub fn init() {
     put_str(16, 54, b"notes.txt   needs FILES", GRAY);
     put_str(17, 54, b"secret.key  needs SECRET", GRAY);
 }
+
+/// Number of files in the store.
+pub fn count() -> usize {
+    FILES.len()
+}
+
+/// Find a file by exact name.
+pub fn find(name: &[u8]) -> Option<u64> {
+    for (i, f) in FILES.iter().enumerate() {
+        if f.name == name {
+            return Some(i as u64);
+        }
+    }
+    None
+}
+
+/// Name and required capability of file `i`. The caller keeps i < count().
+pub fn info(i: usize) -> (&'static [u8], u32) {
+    (FILES[i].name, FILES[i].needs)
+}
+
+/// Contents of file `idx`, or an empty slice for a bad index.
+pub fn data(idx: u64) -> &'static [u8] {
+    if idx < FILES.len() as u64 {
+        FILES[idx as usize].data
+    } else {
+        &[]
+    }
+}

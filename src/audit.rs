@@ -10,6 +10,8 @@ pub const BOOT: u8 = 1;
 pub const START: u8 = 2;
 pub const DENY: u8 = 3;
 pub const KILL: u8 = 4;
+pub const GRANT: u8 = 5;
+pub const REVOKE: u8 = 6;
 
 /// The log keeps the newest CAP entries (a ring). The hash chain still
 /// links every entry to the one before it.
@@ -134,6 +136,8 @@ fn kind_name(k: u8) -> &'static [u8; 5] {
         START => b"START",
         DENY => b"DENY ",
         KILL => b"KILL ",
+        GRANT => b"GRANT",
+        REVOKE => b"REVOK",
         _ => b"???? ",
     }
 }
@@ -147,6 +151,8 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (KILL, 13) => b"GPFAULT ",
         (START, _) => b"RING 3  ",
         (BOOT, _) => b"        ",
+        (GRANT, _) => b"SECRET  ",
+        (REVOKE, _) => b"SECRET  ",
         _ => b"?       ",
     }
 }
@@ -249,7 +255,7 @@ pub fn handle_enter(len: usize) {
 }
 
 /// Demo: simulate an attacker editing the newest log entry in place.
-fn tamper() {
+pub fn tamper() {
     interrupts::without_interrupts(|| {
         let mut log = LOG.lock();
         if log.count == 0 || log.backup.is_some() {
@@ -264,7 +270,7 @@ fn tamper() {
 }
 
 /// Demo: undo the forged edit.
-fn repair() {
+pub fn repair() {
     interrupts::without_interrupts(|| {
         let mut log = LOG.lock();
         if let Some((seq, orig)) = log.backup {
@@ -276,3 +282,32 @@ fn repair() {
         }
     });
 }
+
+/// Format the n-th newest retained entry (0 = newest) as a 22-character
+/// line. Returns the text and whether it is a security event (DENY or KILL).
+pub fn newest_line(n: usize) -> Option<([u8; 22], bool)> {
+    interrupts::without_interrupts(|| {
+        let log = LOG.lock();
+        if n >= CAP || (n as u64) >= log.count {
+            return None;
+        }
+        let seq = log.count - 1 - n as u64;
+        let e = &log.entries[(seq % CAP as u64) as usize];
+        let mut buf = [b' '; 22];
+        let s = e.seq % 1000;
+        buf[0] = b'#';
+        buf[1] = b'0' + (s / 100 % 10) as u8;
+        buf[2] = b'0' + (s / 10 % 10) as u8;
+        buf[3] = b'0' + (s % 10) as u8;
+        buf[5..10].copy_from_slice(kind_name(e.kind));
+        buf[11] = b't';
+        buf[12] = b'0' + e.thread % 10;
+        buf[14..22].copy_from_slice(arg_name(e.kind, e.arg));
+        Some((buf, e.kind == DENY || e.kind == KILL))
+    })
+}
+
+
+
+
+

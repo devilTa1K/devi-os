@@ -66,8 +66,9 @@ pub async fn print_keypresses() {
     while let Some(scancode) = scancodes.next().await {
         if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
             if let Some(DecodedKey::Unicode(c)) = keyboard.process_keyevent(key_event) {
-                crate::typed_char(c);
+                crate::shell::handle_char(c);
             }
         }
     }
 }
+
