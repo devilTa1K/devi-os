@@ -15,12 +15,13 @@ A learning and portfolio project, not production-grade.
 - [x] Stage 9a: NX, W^X user pages, non-executable heap
 - [x] Stage 9b: SMEP and SMAP
 - [x] Stage 9c: guard pages under kernel stacks
+- [x] Stage 9d: syscall filtering, with one-way narrowing
 
 ## In progress
-- [ ] Stage 9d: syscall filtering (last item in the hardening stage)
+- [ ] Stage 9e: shell passphrase for grants
 
 ## Next
-- [ ] Shell authentication (passphrase for grants)
+
 - [ ] Stage 10: userspace AI layer that reads the audit log
 
 ## Known limits
@@ -29,3 +30,6 @@ A learning and portfolio project, not production-grade.
 - The log is a 64-entry RAM ring and is lost on reboot
 - The shell runs in ring 0 and has no login yet
 - SMEP is enabled but has no dedicated test
+
+
+
