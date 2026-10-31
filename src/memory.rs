@@ -185,3 +185,52 @@ pub fn with_user_access<R>(f: impl FnOnce() -> R) -> R {
     }
     r
 }
+
+// ---- Stage 9c: kernel stack guard pages ----
+use core::sync::atomic::{AtomicU64, AtomicUsize};
+
+const MAX_GUARDS: usize = 16;
+static GUARDS: [AtomicU64; MAX_GUARDS] = [const { AtomicU64::new(0) }; MAX_GUARDS];
+static GUARD_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Unmap the 4 KB page at `addr` (inside the kernel heap) so any access to
+/// it faults. Used as a guard page below a kernel stack.
+pub fn guard_page(addr: u64) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut guard = MANAGER.lock();
+        let m = match guard.as_mut() {
+            Some(m) => m,
+            None => return,
+        };
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(addr));
+        // SAFETY: the page lies inside a heap buffer we own and never free
+        // or touch again, so removing its mapping cannot break anything.
+        let result = unsafe { m.mapper.unmap(page) };
+        if let Ok((_frame, flush)) = result {
+            flush.flush();
+            let i = GUARD_COUNT.fetch_add(1, Ordering::Relaxed);
+            if i < MAX_GUARDS {
+                GUARDS[i].store(addr & !0xFFF, Ordering::Relaxed);
+            }
+        }
+    });
+}
+
+/// True if `addr` lies inside a recorded guard page.
+pub fn is_guard_address(addr: u64) -> bool {
+    let n = GUARD_COUNT.load(Ordering::Relaxed).min(MAX_GUARDS);
+    for i in 0..n {
+        let g = GUARDS[i].load(Ordering::Relaxed);
+        if addr >= g && addr < g + 4096 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Show how many guard pages exist, on row 3.
+pub fn show_guards() {
+    let n = GUARD_COUNT.load(Ordering::Relaxed);
+    crate::put_num(3, 60, n as u64, crate::WHITE);
+    crate::put_str(3, 58, b"Guard pages:", crate::CYAN);
+}

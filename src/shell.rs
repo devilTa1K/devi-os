@@ -147,6 +147,7 @@ fn run(line: &[u8]) {
             out(b"forged edit undone", GREEN);
         }
         b"smaptest" => smaptest(),
+        b"overflow" => overflow(),
         b"clear" => {}
         _ => {
             out(b"unknown command", RED);
@@ -159,7 +160,7 @@ fn help() {
     out(b"ls  cat <file>  log  caps", WHITE);
     out(b"grant|revoke secret", WHITE);
     out(b"tamper repair clear help", WHITE);
-    out(b"smaptest: halts on purpose", RED);
+    out(b"smaptest overflow: halt", RED);
 }
 
 fn ls() {
@@ -269,3 +270,29 @@ fn smaptest() {
     let _ = v;
     out(b"read succeeded: SMAP OFF", RED);
 }
+
+/// Recurses without end, using about 300 bytes of stack per call.
+#[inline(never)]
+fn recurse(depth: u64) -> u64 {
+    let pad = [depth as u8; 256];
+    core::hint::black_box(&pad);
+    let r = recurse(depth + 1);
+    core::hint::black_box(&pad);
+    r.wrapping_add(depth)
+}
+
+extern "C" fn overflow_thread() -> ! {
+    recurse(0);
+    loop {}
+}
+
+/// Spawn a kernel thread that overflows its own stack. The guard page
+/// should stop it, and the machine halts with a message.
+fn overflow() {
+    out(b"kernel thread recurses", RED);
+    out(b"until its stack ends", RED);
+    out(b"guard page should HALT", GRAY);
+    crate::scheduler::spawn(overflow_thread, 0);
+}
+
+

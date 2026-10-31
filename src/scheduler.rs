@@ -80,8 +80,8 @@ pub fn init() {
 /// Create a kernel (ring 0) thread. It never returns.
 #[allow(dead_code)]
 pub fn spawn(entry: extern "C" fn() -> !, caps: u32) {
-    let mut stack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
-    let top = (stack.as_mut_ptr() as u64 + STACK_SIZE as u64) & !0xF;
+    let (stack, top) = new_guarded_stack();
+    
 
     // Layout (high to low): 5-word interrupt frame, then 15 saved registers.
     let frame = top - 40;
@@ -146,8 +146,8 @@ pub fn spawn_user(start: usize, end: usize, caps: u32) -> bool {
 
     // This thread's own kernel stack (used by the CPU when it arrives from
     // ring 3). It lives on the heap, which ring 3 cannot access.
-    let mut kstack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
-    let top = (kstack.as_mut_ptr() as u64 + STACK_SIZE as u64) & !0xF;
+    let (kstack, top) = new_guarded_stack();
+    
     let frame = top - 40;
     let regs = frame - 15 * 8;
 
@@ -223,6 +223,25 @@ pub fn current_id() -> usize {
         None => 255,
     }
 }
+
+
+
+
+/// Allocate a kernel stack with an unmapped guard page below it. Returns
+/// the owning buffer and the 16-byte-aligned top of the usable stack.
+/// The buffer is never freed: threads never exit, and freeing a buffer
+/// that contains an unmapped page would fault.
+fn new_guarded_stack() -> (Box<[u8]>, u64) {
+    let len = STACK_SIZE + 3 * 4096;
+    let stack = alloc::vec![0u8; len].into_boxed_slice();
+    let base = stack.as_ptr() as u64;
+    // The first 4 KB-aligned page inside the buffer becomes the guard.
+    let guard = (base + 4095) & !4095;
+    memory::guard_page(guard);
+    let top = (base + len as u64) & !0xF;
+    (stack, top)
+}
+
 
 
 

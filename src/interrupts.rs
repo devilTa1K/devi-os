@@ -71,7 +71,11 @@ extern "x86-interrupt" fn double_fault_handler(
     _stack_frame: InterruptStackFrame,
     _error_code: u64,
 ) -> ! {
-    crate::put_str(22, 26, b"EXCEPTION: DOUBLE FAULT (caught safely)", crate::RED);
+    if crate::memory::is_guard_address(x86_64::registers::control::Cr2::read_raw()) {
+        crate::put_str(22, 26, b"KERNEL STACK OVERFLOW - GUARD PAGE HIT", crate::RED);
+    } else {
+        crate::put_str(22, 26, b"EXCEPTION: DOUBLE FAULT (caught safely)", crate::RED);
+    }
     loop {
         x86_64::instructions::hlt();
     }
@@ -223,6 +227,7 @@ extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _er
 pub fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
+
 
 
 
