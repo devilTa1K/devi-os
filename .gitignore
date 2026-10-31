@@ -1,3 +1,4 @@
 target/
 build-error.txt
 build-error.txt
+src/auth_config.rs

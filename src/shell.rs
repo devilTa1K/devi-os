@@ -296,3 +296,85 @@ fn overflow() {
 }
 
 
+
+/// `grant secret` starts here: ask for the passphrase, unless locked out.
+fn begin_grant() {
+    let now = crate::interrupts::ticks();
+    if now < LOCKED_UNTIL.load(Ordering::Relaxed) {
+        out(b"grant is locked, wait", RED);
+        out(b"(about 30 s after 3 fails)", GRAY);
+        return;
+    }
+    AWAITING.store(true, Ordering::Relaxed);
+    out(b"enter passphrase + Enter", CYAN);
+    out(b"(masked, empty = cancel)", GRAY);
+}
+
+/// Called with the typed passphrase when Enter is pressed in passphrase mode.
+fn finish_grant(pass: &[u8]) {
+    clear_output();
+    if pass.is_empty() {
+        out(b"grant cancelled", GRAY);
+        return;
+    }
+    if auth::verify(pass) {
+        FAILS.store(0, Ordering::Relaxed);
+        SHELL_CAPS.fetch_or(CAP_SECRET, Ordering::Relaxed);
+        audit::record(audit::GRANT, 0, CAP_SECRET as u64);
+        out(b"SECRET granted", GREEN);
+        out(b"(logged to audit)", GRAY);
+    } else {
+        let n = FAILS.fetch_add(1, Ordering::Relaxed) + 1;
+        audit::record(audit::AUTH_FAIL, 0, n as u64);
+        out(b"wrong passphrase", RED);
+        if n >= 3 {
+            FAILS.store(0, Ordering::Relaxed);
+            LOCKED_UNTIL.store(crate::interrupts::ticks() + LOCKOUT_TICKS, Ordering::Relaxed);
+            out(b"3 fails: grant locked", RED);
+            out(b"for about 30 seconds", GRAY);
+        } else {
+            out(b"(logged to audit)", GRAY);
+        }
+    }
+}
+
+/// `grant secret` starts here: ask for the passphrase, unless locked out.
+fn begin_grant() {
+    let now = crate::interrupts::ticks();
+    if now < LOCKED_UNTIL.load(Ordering::Relaxed) {
+        out(b"grant is locked, wait", RED);
+        out(b"(about 30 s after 3 fails)", GRAY);
+        return;
+    }
+    AWAITING.store(true, Ordering::Relaxed);
+    out(b"enter passphrase + Enter", CYAN);
+    out(b"(masked, empty = cancel)", GRAY);
+}
+
+/// Called with the typed passphrase when Enter is pressed in passphrase mode.
+fn finish_grant(pass: &[u8]) {
+    clear_output();
+    if pass.is_empty() {
+        out(b"grant cancelled", GRAY);
+        return;
+    }
+    if auth::verify(pass) {
+        FAILS.store(0, Ordering::Relaxed);
+        SHELL_CAPS.fetch_or(CAP_SECRET, Ordering::Relaxed);
+        audit::record(audit::GRANT, 0, CAP_SECRET as u64);
+        out(b"SECRET granted", GREEN);
+        out(b"(logged to audit)", GRAY);
+    } else {
+        let n = FAILS.fetch_add(1, Ordering::Relaxed) + 1;
+        audit::record(audit::AUTH_FAIL, 0, n as u64);
+        out(b"wrong passphrase", RED);
+        if n >= 3 {
+            FAILS.store(0, Ordering::Relaxed);
+            LOCKED_UNTIL.store(crate::interrupts::ticks() + LOCKOUT_TICKS, Ordering::Relaxed);
+            out(b"3 fails: grant locked", RED);
+            out(b"for about 30 seconds", GRAY);
+        } else {
+            out(b"(logged to audit)", GRAY);
+        }
+    }
+}

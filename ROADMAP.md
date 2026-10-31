@@ -33,3 +33,6 @@ A learning and portfolio project, not production-grade.
 
 
 
+
+## Build note
+- Run .\setup-auth.ps1 once to create src\auth_config.rs (gitignored) before cargo run.
