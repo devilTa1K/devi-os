@@ -21,6 +21,8 @@ mod scheduler;
 mod syscall;
 mod apps;
 mod audit;
+mod auth;
+mod auth_config;
 mod fs;
 mod shell;
 mod task;
@@ -319,6 +321,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
 
 
 

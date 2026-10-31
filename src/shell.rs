@@ -1,8 +1,9 @@
 use crate::audit;
+use crate::auth;
 use crate::fs;
 use crate::syscall::{CAP_FILES, CAP_SECRET};
 use crate::{put_char, put_str, CYAN, GRAY, INPUT_COL, INPUT_ROW, RED, WHITE};
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 const GREEN: u8 = 0x0A;
@@ -16,6 +17,13 @@ const OUT_LAST: usize = 20;
 
 static INPUT: Mutex<([u8; MAX], usize)> = Mutex::new(([0; MAX], 0));
 static OUT_ROW: AtomicUsize = AtomicUsize::new(OUT_FIRST);
+
+/// True while the shell is waiting for a passphrase (input is masked).
+static AWAITING: AtomicBool = AtomicBool::new(false);
+static FAILS: AtomicU32 = AtomicU32::new(0);
+/// grant is locked until this tick count (about 18 ticks per second).
+static LOCKED_UNTIL: AtomicU64 = AtomicU64::new(0);
+const LOCKOUT_TICKS: u64 = 540;
 
 /// The console shell starts with FILES only. SECRET must be granted, and
 /// every grant and revoke is written to the audit log.
@@ -47,7 +55,7 @@ fn out(s: &[u8], color: u8) {
 fn draw_input(buf: &[u8; MAX], len: usize) {
     for i in 0..MAX {
         let (ch, color) = if i < len {
-            (buf[i], WHITE)
+            (if AWAITING.load(Ordering::Relaxed) { b'*' } else { buf[i] }, WHITE)
         } else if i == len {
             (b'_', CYAN)
         } else {
@@ -82,10 +90,15 @@ pub fn handle_char(c: char) {
                 let mut g = INPUT.lock();
                 let copy = (g.0, g.1);
                 g.1 = 0;
+                g.0 = [0u8; MAX];
                 copy
             };
             draw_input(&[0u8; MAX], 0);
-            run(&line[..len]);
+            if AWAITING.swap(false, Ordering::Relaxed) {
+                finish_grant(&line[..len]);
+            } else {
+                run(&line[..len]);
+            }
         }
         '\u{8}' => {
             let mut g = INPUT.lock();
@@ -243,9 +256,10 @@ fn change_cap(arg: &[u8], grant: bool) {
         return;
     }
     if grant {
-        SHELL_CAPS.fetch_or(CAP_SECRET, Ordering::Relaxed);
-        audit::record(audit::GRANT, 0, CAP_SECRET as u64);
-        out(b"SECRET granted", GREEN);
+        begin_grant();
+        return;
+        
+        
     } else {
         SHELL_CAPS.fetch_and(!CAP_SECRET, Ordering::Relaxed);
         audit::record(audit::REVOKE, 0, CAP_SECRET as u64);
@@ -297,46 +311,14 @@ fn overflow() {
 
 
 
-/// `grant secret` starts here: ask for the passphrase, unless locked out.
-fn begin_grant() {
-    let now = crate::interrupts::ticks();
-    if now < LOCKED_UNTIL.load(Ordering::Relaxed) {
-        out(b"grant is locked, wait", RED);
-        out(b"(about 30 s after 3 fails)", GRAY);
-        return;
-    }
-    AWAITING.store(true, Ordering::Relaxed);
-    out(b"enter passphrase + Enter", CYAN);
-    out(b"(masked, empty = cancel)", GRAY);
-}
 
-/// Called with the typed passphrase when Enter is pressed in passphrase mode.
-fn finish_grant(pass: &[u8]) {
-    clear_output();
-    if pass.is_empty() {
-        out(b"grant cancelled", GRAY);
-        return;
-    }
-    if auth::verify(pass) {
-        FAILS.store(0, Ordering::Relaxed);
-        SHELL_CAPS.fetch_or(CAP_SECRET, Ordering::Relaxed);
-        audit::record(audit::GRANT, 0, CAP_SECRET as u64);
-        out(b"SECRET granted", GREEN);
-        out(b"(logged to audit)", GRAY);
-    } else {
-        let n = FAILS.fetch_add(1, Ordering::Relaxed) + 1;
-        audit::record(audit::AUTH_FAIL, 0, n as u64);
-        out(b"wrong passphrase", RED);
-        if n >= 3 {
-            FAILS.store(0, Ordering::Relaxed);
-            LOCKED_UNTIL.store(crate::interrupts::ticks() + LOCKOUT_TICKS, Ordering::Relaxed);
-            out(b"3 fails: grant locked", RED);
-            out(b"for about 30 seconds", GRAY);
-        } else {
-            out(b"(logged to audit)", GRAY);
-        }
-    }
-}
+
+
+
+
+
+
+
 
 /// `grant secret` starts here: ask for the passphrase, unless locked out.
 fn begin_grant() {

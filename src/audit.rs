@@ -13,6 +13,7 @@ pub const KILL: u8 = 4;
 pub const GRANT: u8 = 5;
 pub const REVOKE: u8 = 6;
 pub const SANDBOX: u8 = 7;
+pub const AUTH_FAIL: u8 = 8;
 
 /// The log keeps the newest CAP entries (a ring). The hash chain still
 /// links every entry to the one before it.
@@ -140,6 +141,7 @@ fn kind_name(k: u8) -> &'static [u8; 5] {
         GRANT => b"GRANT",
         REVOKE => b"REVOK",
         SANDBOX => b"SANDB",
+        AUTH_FAIL => b"AUTHF",
         _ => b"???? ",
     }
 }
@@ -155,6 +157,7 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (KILL, 16) => b"WRFAULT ",
         (KILL, 17) => b"FLTRKILL",
         (SANDBOX, _) => b"FILTER  ",
+        (AUTH_FAIL, _) => b"BAD PASS",
         (START, _) => b"RING 3  ",
         (BOOT, _) => b"        ",
         (GRANT, _) => b"SECRET  ",
@@ -182,7 +185,7 @@ fn draw_entry(row: usize, e: &Entry) {
     buf[11] = b't';
     buf[12] = b'0' + e.thread % 10;
     buf[14..22].copy_from_slice(arg_name(e.kind, e.arg));
-    let color = if e.kind == DENY || e.kind == KILL { RED } else { GRAY };
+    let color = if e.kind == DENY || e.kind == KILL || e.kind == AUTH_FAIL { RED } else { GRAY };
     put_str(row, 2, &buf, color);
 }
 
@@ -309,9 +312,14 @@ pub fn newest_line(n: usize) -> Option<([u8; 22], bool)> {
         buf[11] = b't';
         buf[12] = b'0' + e.thread % 10;
         buf[14..22].copy_from_slice(arg_name(e.kind, e.arg));
-        Some((buf, e.kind == DENY || e.kind == KILL))
+        Some((buf, e.kind == DENY || e.kind == KILL || e.kind == AUTH_FAIL))
     })
 }
+
+
+
+
+
 
 
 
