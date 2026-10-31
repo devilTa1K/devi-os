@@ -203,6 +203,13 @@ extern "x86-interrupt" fn page_fault_handler(
     } else {
         b"PAGE FAULT (memory)   "
     };
+    let addr = x86_64::registers::control::Cr2::read_raw();
+    if !came_from_ring3(&stack_frame) && (0x5555_0000_0000..0x5556_0000_0000).contains(&addr) {
+        crate::put_str(21, 40, b"SMAP BLOCKED KERNEL - HALTED", crate::RED);
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
     handle_fault(&stack_frame, name);
 }
 
@@ -216,6 +223,7 @@ extern "x86-interrupt" fn gp_fault_handler(stack_frame: InterruptStackFrame, _er
 pub fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
+
 
 
 

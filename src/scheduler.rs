@@ -129,8 +129,10 @@ pub fn spawn_user(start: usize, end: usize, caps: u32) -> bool {
     // SAFETY: both pages were just mapped writable at `base`. We zero them
     // first so no leftover kernel data leaks to the app, then copy the code.
     unsafe {
-        core::ptr::write_bytes(base as *mut u8, 0, 0x2000);
+        memory::with_user_access(|| {
+            core::ptr::write_bytes(base as *mut u8, 0, 0x2000);
         core::ptr::copy_nonoverlapping(start as *const u8, base as *mut u8, len);
+        });
     }
     let user_stack_top = base + 0x2000;
 
@@ -221,4 +223,6 @@ pub fn current_id() -> usize {
         None => 255,
     }
 }
+
+
 

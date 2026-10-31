@@ -278,6 +278,14 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         b"Hardening: NX FAILED"
     };
     put_str(3, 2, hardening, CYAN);
+    let (smep, smap) = memory::enable_smep_smap();
+    let hw: &[u8] = match (smep, smap) {
+        (true, true) => b"SMEP on, SMAP on",
+        (true, false) => b"SMEP on, SMAP n/a",
+        (false, true) => b"SMEP n/a, SMAP on",
+        (false, false) => b"SMEP/SMAP n/a",
+    };
+    put_str(3, 40, hw, CYAN);
     syscall::draw_panel();
     scheduler::init();
     audit::init();
@@ -309,6 +317,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
 
 
 

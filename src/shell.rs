@@ -146,6 +146,7 @@ fn run(line: &[u8]) {
             audit::repair();
             out(b"forged edit undone", GREEN);
         }
+        b"smaptest" => smaptest(),
         b"clear" => {}
         _ => {
             out(b"unknown command", RED);
@@ -158,6 +159,7 @@ fn help() {
     out(b"ls  cat <file>  log  caps", WHITE);
     out(b"grant|revoke secret", WHITE);
     out(b"tamper repair clear help", WHITE);
+    out(b"smaptest: halts on purpose", RED);
 }
 
 fn ls() {
@@ -251,3 +253,19 @@ fn change_cap(arg: &[u8], grant: bool) {
     out(b"(logged to audit)", GRAY);
 }
 
+
+
+
+/// Deliberately make the kernel read user memory WITHOUT a stac/clac window.
+/// With SMAP on, the CPU faults and the kernel halts. If SMAP is off, the
+/// read succeeds and we say so.
+fn smaptest() {
+    out(b"kernel reads user memory", RED);
+    out(b"with NO stac/clac window", RED);
+    out(b"SMAP should HALT the box", GRAY);
+    // SAFETY: deliberate. 0x5555_0000_0000 is a mapped user page, so the
+    // read is valid unless SMAP stops it, which is what this test shows.
+    let v = unsafe { core::ptr::read_volatile(0x5555_0000_0000usize as *const u8) };
+    let _ = v;
+    out(b"read succeeded: SMAP OFF", RED);
+}

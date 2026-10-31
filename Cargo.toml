@@ -17,3 +17,6 @@ sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 
 [profile.dev.package.sha2]
 opt-level = 3
+
+[package.metadata.bootimage]
+run-args = ["-cpu", "max"]

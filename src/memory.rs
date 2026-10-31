@@ -137,3 +137,51 @@ pub fn protect_user_page(addr: u64, writable: bool, executable: bool) -> Result<
     }
     Ok(())
 }
+
+// ---- Stage 9b: SMEP and SMAP ----
+use core::sync::atomic::{AtomicBool, Ordering};
+
+static SMAP_ON: AtomicBool = AtomicBool::new(false);
+
+/// Turn on SMEP and SMAP if the CPU has them. Returns (smep, smap).
+pub fn enable_smep_smap() -> (bool, bool) {
+    use x86_64::registers::control::{Cr4, Cr4Flags};
+
+    let max_leaf = unsafe { core::arch::x86_64::__cpuid(0) }.eax;
+    if max_leaf < 7 {
+        return (false, false);
+    }
+    let leaf7 = unsafe { core::arch::x86_64::__cpuid_count(7, 0) };
+    let smep = leaf7.ebx & (1 << 7) != 0;
+    let smap = leaf7.ebx & (1 << 20) != 0;
+
+    // SAFETY: we only set CR4 bits that the CPU reports as supported.
+    unsafe {
+        Cr4::update(|flags| {
+            if smep {
+                flags.insert(Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION);
+            }
+            if smap {
+                flags.insert(Cr4Flags::SUPERVISOR_MODE_ACCESS_PREVENTION);
+            }
+        });
+    }
+    SMAP_ON.store(smap, Ordering::Relaxed);
+    (smep, smap)
+}
+
+/// Run `f` with kernel access to user pages allowed (a stac/clac window).
+pub fn with_user_access<R>(f: impl FnOnce() -> R) -> R {
+    let on = SMAP_ON.load(Ordering::Relaxed);
+    if on {
+        // SAFETY: stac only sets EFLAGS.AC. It is used only when SMAP is on,
+        // which means the CPU supports the instruction.
+        unsafe { core::arch::asm!("stac", options(nostack)) };
+    }
+    let r = f();
+    if on {
+        // SAFETY: clac closes the window opened above.
+        unsafe { core::arch::asm!("clac", options(nostack)) };
+    }
+    r
+}
