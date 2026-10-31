@@ -195,3 +195,67 @@ pub fn start_hardening_demo() {
         put_str(24, 55, b"HARDENING APPS FAILED", RED);
     }
 }
+
+core::arch::global_asm!(r#"
+    .text
+
+    .global user_prog_h_start
+    .global user_prog_h_end
+user_prog_h_start:
+    mov rcx, 1500000000
+.Lh_delay:
+    dec rcx
+    jnz .Lh_delay
+    mov rax, 99
+    mov rdi, 0
+    int 0x80
+.Lh_never:
+    jmp .Lh_never
+user_prog_h_end:
+
+    .global user_prog_i_start
+    .global user_prog_i_end
+user_prog_i_start:
+    mov rcx, 1800000000
+.Li_delay:
+    dec rcx
+    jnz .Li_delay
+    mov rax, 3
+    mov rdi, 0
+    int 0x80
+    mov rax, 4
+    mov rdi, 18
+    int 0x80
+    mov rax, 4
+    mov rdi, 0xFFFFFFFF
+    int 0x80
+    mov rax, 3
+    mov rdi, 0
+    int 0x80
+.Li_never:
+    jmp .Li_never
+user_prog_i_end:
+"#);
+
+unsafe extern "C" {
+    static user_prog_h_start: u8;
+    static user_prog_h_end: u8;
+    static user_prog_i_start: u8;
+    static user_prog_i_end: u8;
+}
+
+/// App H calls a syscall that does not exist. App I sandboxes itself and
+/// then calls a syscall it just gave up, even though it still holds the
+/// capability for it. The filter should kill both.
+pub fn start_filter_demo() {
+    let h0 = (&raw const user_prog_h_start) as usize;
+    let h1 = (&raw const user_prog_h_end) as usize;
+    let i0 = (&raw const user_prog_i_start) as usize;
+    let i1 = (&raw const user_prog_i_end) as usize;
+
+    let ok_h = spawn_user(h0, h1, 0);
+    let ok_i = spawn_user(i0, i1, crate::syscall::CAP_PRINT | crate::syscall::CAP_FILES);
+    if !(ok_h && ok_i) {
+        put_str(24, 55, b"FILTER APPS FAILED", RED);
+    }
+}

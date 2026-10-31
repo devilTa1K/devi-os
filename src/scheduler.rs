@@ -21,6 +21,8 @@ struct Thread {
     rsp: u64,
     /// Capability bits granted to this thread when it was created.
     caps: u32,
+    /// Syscalls this thread may call (one bit per call number). Can only shrink.
+    filter: u32,
     /// Top of this thread's kernel stack if it runs in ring 3, else 0.
     kstack_top: u64,
     /// Killed after a fault. The scheduler never runs a dead thread again.
@@ -68,6 +70,7 @@ pub fn init() {
             threads: alloc::vec![Thread {
                 rsp: 0,
                 caps: crate::syscall::CAP_ALL,
+                filter: crate::syscall::FILTER_ALL,
                 kstack_top: 0,
                 dead: false,
                 _stack: Vec::new().into_boxed_slice(),
@@ -103,7 +106,7 @@ pub fn spawn(entry: extern "C" fn() -> !, caps: u32) {
 
     interrupts::without_interrupts(|| {
         if let Some(s) = SCHEDULER.lock().as_mut() {
-            s.threads.push(Thread { rsp: regs, caps, kstack_top: 0, dead: false, _stack: stack });
+            s.threads.push(Thread { rsp: regs, caps, filter: crate::syscall::FILTER_ALL, kstack_top: 0, dead: false, _stack: stack });
         }
     });
 }
@@ -168,7 +171,7 @@ pub fn spawn_user(start: usize, end: usize, caps: u32) -> bool {
 
     interrupts::without_interrupts(|| {
         if let Some(s) = SCHEDULER.lock().as_mut() {
-            s.threads.push(Thread { rsp: regs, caps, kstack_top: top, dead: false, _stack: kstack });
+            s.threads.push(Thread { rsp: regs, caps, filter: crate::syscall::FILTER_ALL, kstack_top: top, dead: false, _stack: kstack });
             crate::audit::record(crate::audit::START, (s.threads.len() - 1) as u8, caps as u64);
         }
     });
@@ -240,6 +243,33 @@ fn new_guarded_stack() -> (Box<[u8]>, u64) {
     memory::guard_page(guard);
     let top = (base + len as u64) & !0xF;
     (stack, top)
+}
+
+
+
+
+
+/// Syscall filter of the running thread, or None if the scheduler is busy.
+pub fn current_filter() -> Option<u32> {
+    match SCHEDULER.try_lock() {
+        Some(guard) => guard.as_ref().map(|s| s.threads[s.current].filter),
+        None => None,
+    }
+}
+
+/// Narrow the running thread's filter to the calls in `mask`. A filter can
+/// only shrink, never grow. Returns the new filter.
+pub fn narrow_filter(mask: u32) -> Option<u32> {
+    match SCHEDULER.try_lock() {
+        Some(mut guard) => {
+            let s = guard.as_mut()?;
+            let cur = s.current;
+            let t = &mut s.threads[cur];
+            t.filter &= mask & crate::syscall::FILTER_ALL;
+            Some(t.filter)
+        }
+        None => None,
+    }
 }
 
 

@@ -12,6 +12,10 @@ pub const CAP_ALL: u32 = u32::MAX;
 pub const SYS_PRINT: u64 = 1;
 pub const SYS_NETWORK: u64 = 2;
 pub const SYS_FILES: u64 = 3;
+pub const SYS_SANDBOX: u64 = 4;
+
+/// Every call a thread may make by default: one bit per call number (1..4).
+pub const FILTER_ALL: u32 = 0b1_1110;
 
 // Results (returned in rax).
 pub const OK: u64 = 0;
@@ -77,6 +81,26 @@ pub extern "C" fn syscall_entry() {
 }
 
 extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
+    // Stage 9d: the filter runs BEFORE capabilities. A call outside the
+    // thread's filter is not an error to return: it kills the thread.
+    let filter = match crate::scheduler::current_filter() {
+        Some(f) => f,
+        None => return DENIED, // fail closed, but never kill on a failed lookup
+    };
+    if num >= 32 || filter & (1u32 << num) == 0 {
+        crate::interrupts::filter_kill();
+    }
+    if num == SYS_SANDBOX {
+        // Keep only the calls named in `arg`. A filter can shrink, never grow.
+        let tid = crate::scheduler::current_id();
+        return match crate::scheduler::narrow_filter(arg as u32) {
+            Some(new) => {
+                crate::audit::record(crate::audit::SANDBOX, tid as u8, new as u64);
+                OK
+            }
+            None => DENIED,
+        };
+    }
     let (needed, name): (u32, &[u8; 8]) = match num {
         SYS_PRINT => (CAP_PRINT, b"PRINT   "),
         SYS_NETWORK => (CAP_NETWORK, b"NETWORK "),
@@ -115,6 +139,8 @@ extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
     }
     OK
 }
+
+
 
 
 

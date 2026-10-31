@@ -232,3 +232,21 @@ pub fn ticks() -> u64 {
 
 
 
+
+/// Kill the running thread for calling a syscall outside its filter.
+pub fn filter_kill() -> ! {
+    if let Some(id) = crate::scheduler::kill_current() {
+        crate::audit::record(crate::audit::KILL, id as u8, 17);
+        let n = KILLS.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::put_num(24, 43, n, crate::RED);
+        crate::put_str(23, 30, b"Last kill: thread ", crate::GRAY);
+        crate::put_char(23, 48, b'0' + (id % 10) as u8, crate::WHITE);
+        crate::put_str(23, 50, b"SYSCALL FILTER        ", crate::RED);
+    }
+    // The thread is marked dead. Let the timer interrupt preempt us; the
+    // scheduler will never run the dead thread again.
+    x86_64::instructions::interrupts::enable();
+    loop {
+        x86_64::instructions::hlt();
+    }
+}

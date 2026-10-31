@@ -12,6 +12,7 @@ pub const DENY: u8 = 3;
 pub const KILL: u8 = 4;
 pub const GRANT: u8 = 5;
 pub const REVOKE: u8 = 6;
+pub const SANDBOX: u8 = 7;
 
 /// The log keeps the newest CAP entries (a ring). The hash chain still
 /// links every entry to the one before it.
@@ -138,6 +139,7 @@ fn kind_name(k: u8) -> &'static [u8; 5] {
         KILL => b"KILL ",
         GRANT => b"GRANT",
         REVOKE => b"REVOK",
+        SANDBOX => b"SANDB",
         _ => b"???? ",
     }
 }
@@ -151,6 +153,8 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (KILL, 13) => b"GPFAULT ",
         (KILL, 15) => b"NXFAULT ",
         (KILL, 16) => b"WRFAULT ",
+        (KILL, 17) => b"FLTRKILL",
+        (SANDBOX, _) => b"FILTER  ",
         (START, _) => b"RING 3  ",
         (BOOT, _) => b"        ",
         (GRANT, _) => b"SECRET  ",
@@ -308,6 +312,9 @@ pub fn newest_line(n: usize) -> Option<([u8; 22], bool)> {
         Some((buf, e.kind == DENY || e.kind == KILL))
     })
 }
+
+
+
 
 
 
