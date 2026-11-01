@@ -16,23 +16,30 @@ A learning and portfolio project, not production-grade.
 - [x] Stage 9b: SMEP and SMAP
 - [x] Stage 9c: guard pages under kernel stacks
 - [x] Stage 9d: syscall filtering, with one-way narrowing
+- [x] Stage 9e: shell passphrase for grants (masked input, lockout, audited failures); manually functionally tested
 
 ## In progress
-- [ ] Stage 9e: shell passphrase for grants
+- [ ] Stage 10: userspace AI layer over the audit log (design first)
 
 ## Next
 
-- [ ] Stage 10: userspace AI layer that reads the audit log
+- [ ] Later: remove or protect the tamper and repair demo commands
 
 ## Known limits
 - All apps share one address space (no per-process page tables yet)
 - Ring-0 code can rewrite the audit log and its hash chain; the head hash is not anchored outside the machine
 - The log is a 64-entry RAM ring and is lost on reboot
-- The shell runs in ring 0 and has no login yet
+- The shell runs in ring 0. grant needs a passphrase, but tamper and repair are still open demo commands
 - SMEP is enabled but has no dedicated test
+- The passphrase hash is built into the kernel image and uses 20,000 SHA-256 rounds, so only a long random passphrase is safe
 
 
 
 
 ## Build note
 - Run .\setup-auth.ps1 once to create src\auth_config.rs (gitignored) before cargo run.
+
+
+
+
+
