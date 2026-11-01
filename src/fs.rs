@@ -33,6 +33,9 @@ pub fn read(thread: usize, idx: u64) -> u64 {
     }
     let f = &FILES[idx as usize];
     show_access(thread, f.name, true);
+    if f.needs == CAP_SECRET {
+        crate::audit::record(crate::audit::READ, thread as u8, idx);
+    }
     f.data.len() as u64
 }
 
@@ -92,3 +95,4 @@ pub fn data(idx: u64) -> &'static [u8] {
         &[]
     }
 }
+
