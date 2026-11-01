@@ -1,4 +1,4 @@
-use crate::scheduler::spawn_user;
+use crate::scheduler::spawn_isolated as spawn_user;
 use crate::syscall::CAP_PRINT;
 use crate::{put_num, put_str, CYAN, GRAY, RED};
 
@@ -380,3 +380,88 @@ pub fn start_audit_demo() {
         put_str(24, 55, b"AUDIT APPS FAILED", RED);
     }
 }
+
+
+core::arch::global_asm!(r#"
+    .text
+
+    .global user_prog_m_start
+    .global user_prog_m_end
+user_prog_m_start:
+    mov rbx, 0x4D4D4D4D4D4D4D4D
+    mov qword ptr [rsp - 512], rbx
+.Lm_loop:
+    mov rdx, qword ptr [rsp - 512]
+    cmp rdx, rbx
+    jne .Lm_bad
+    mov rdi, 109
+    jmp .Lm_print
+.Lm_bad:
+    mov rdi, 33
+.Lm_print:
+    mov rax, 1
+    int 0x80
+    mov rcx, 40000000
+.Lm_d:
+    dec rcx
+    jnz .Lm_d
+    jmp .Lm_loop
+user_prog_m_end:
+
+    .global user_prog_n_start
+    .global user_prog_n_end
+user_prog_n_start:
+    mov rbx, 0x4E4E4E4E4E4E4E4E
+    mov qword ptr [rsp - 512], rbx
+    mov r9, 20
+.Ln_loop:
+    mov rdx, qword ptr [rsp - 512]
+    cmp rdx, rbx
+    jne .Ln_bad
+    mov rdi, 110
+    jmp .Ln_print
+.Ln_bad:
+    mov rdi, 33
+.Ln_print:
+    mov rax, 1
+    int 0x80
+    mov rcx, 40000000
+.Ln_d:
+    dec rcx
+    jnz .Ln_d
+    dec r9
+    jnz .Ln_loop
+    mov rax, 0x555500001000
+    mov rdx, qword ptr [rax]
+.Ln_never:
+    jmp .Ln_never
+user_prog_n_end:
+"#);
+
+unsafe extern "C" {
+    static user_prog_m_start: u8;
+    static user_prog_m_end: u8;
+    static user_prog_n_start: u8;
+    static user_prog_n_end: u8;
+}
+
+/// Processes M and N run at the SAME virtual address in separate address
+/// spaces. Each keeps checking that its own marker is still in place ('m' or
+/// 'n' on success, '!' if another process overwrote it). After 20 rounds N
+/// reads App A's stack page directly, which is not mapped in its tree.
+pub fn start_isolation_demo() {
+    const SHARED_BASE: u64 = 0x5555_0200_0000;
+    let m0 = (&raw const user_prog_m_start) as usize;
+    let m1 = (&raw const user_prog_m_end) as usize;
+    let n0 = (&raw const user_prog_n_start) as usize;
+    let n1 = (&raw const user_prog_n_end) as usize;
+
+    let ok_m = crate::scheduler::spawn_isolated_at(m0, m1, crate::syscall::CAP_PRINT, SHARED_BASE);
+    let ok_n = crate::scheduler::spawn_isolated_at(n0, n1, crate::syscall::CAP_PRINT, SHARED_BASE);
+    put_num(0, 10, 0, crate::WHITE);
+    put_str(0, 2, b"Isolation breaches:", GRAY);
+    if !(ok_m && ok_n) {
+        put_str(24, 55, b"ISOLATION APPS FAILED", RED);
+    }
+}
+

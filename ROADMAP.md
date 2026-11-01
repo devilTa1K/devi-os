@@ -31,7 +31,7 @@ A learning and portfolio project, not production-grade.
 - [ ] Later: remove or protect the tamper and repair demo commands
 
 ## Known limits
-- All apps share one address space (no per-process page tables yet)
+- Processes have separate page tables, but a dead process's memory is not freed yet (M1e)
 - Ring-0 code can rewrite the log and its hash chain in RAM. verify-audit.ps1 catches that only for history the host already received; an attacker can also stop sending, and the serial stream is unsigned
 - The log is a 64-entry RAM ring and is lost on reboot
 - The shell runs in ring 0. grant needs a passphrase, but tamper and repair are still open demo commands
@@ -58,10 +58,12 @@ A learning and portfolio project, not production-grade.
 
 
 ## Next phase: run your own text-mode programs (M1)
-- [ ] M1a: per-process address spaces (own page tables, shared kernel half)
+- [x] M1a: per-process address spaces (own page tables, shared kernel half, W^X from the first mapping)
 - [ ] M1b: separately built Rust user programs (flat binary, own crate)
 - [ ] M1c: ELF loader with strict validation
 - [ ] M1d: program syscalls: write, read_line, exit (copy_from_user and copy_to_user)
 - [ ] M1e: process lifecycle: exit, free memory, run from the shell, ps, kill
 - [ ] M1f: manifest capabilities; the audit log records the SHA-256 of each program started
 - [ ] M1g: a small user library and sample programs (echo, calc, notes)
+
+

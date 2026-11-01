@@ -23,6 +23,8 @@ struct Thread {
     caps: u32,
     /// Syscalls this thread may call (one bit per call number). Can only shrink.
     filter: u32,
+    /// Physical address of this thread's level-4 page table (0 = the kernel's own).
+    cr3: u64,
     /// Top of this thread's kernel stack if it runs in ring 3, else 0.
     kstack_top: u64,
     /// Killed after a fault. The scheduler never runs a dead thread again.
@@ -56,6 +58,7 @@ impl Scheduler {
             // it arrives from ring 3.
             crate::gdt::set_kernel_stack(next.kstack_top);
         }
+        crate::memory::switch_address_space(next.cr3);
         next.rsp
     }
 }
@@ -70,7 +73,7 @@ pub fn init() {
             threads: alloc::vec![Thread {
                 rsp: 0,
                 caps: crate::syscall::CAP_ALL,
-                filter: crate::syscall::FILTER_ALL,
+                filter: crate::syscall::FILTER_ALL, cr3: 0,
                 kstack_top: 0,
                 dead: false,
                 _stack: Vec::new().into_boxed_slice(),
@@ -106,7 +109,7 @@ pub fn spawn(entry: extern "C" fn() -> !, caps: u32) {
 
     interrupts::without_interrupts(|| {
         if let Some(s) = SCHEDULER.lock().as_mut() {
-            s.threads.push(Thread { rsp: regs, caps, filter: crate::syscall::FILTER_ALL, kstack_top: 0, dead: false, _stack: stack });
+            s.threads.push(Thread { rsp: regs, caps, filter: crate::syscall::FILTER_ALL, cr3: 0, kstack_top: 0, dead: false, _stack: stack });
         }
     });
 }
@@ -171,7 +174,7 @@ pub fn spawn_user(start: usize, end: usize, caps: u32) -> bool {
 
     interrupts::without_interrupts(|| {
         if let Some(s) = SCHEDULER.lock().as_mut() {
-            s.threads.push(Thread { rsp: regs, caps, filter: crate::syscall::FILTER_ALL, kstack_top: top, dead: false, _stack: kstack });
+            s.threads.push(Thread { rsp: regs, caps, filter: crate::syscall::FILTER_ALL, cr3: 0, kstack_top: top, dead: false, _stack: kstack });
             crate::audit::record(crate::audit::START, (s.threads.len() - 1) as u8, caps as u64);
             USER_BASES[s.threads.len() - 1].store(base, Ordering::Relaxed);
         }
@@ -294,3 +297,83 @@ pub fn current_user_buffer() -> Option<(u64, u64)> {
     Some((base + 0x1000, base + 0x2000))
 }
 
+
+
+
+
+/// Start a user program in its own address space at a slot-based address.
+pub fn spawn_isolated(start: usize, end: usize, caps: u32) -> bool {
+    let slot = NEXT_USER_SLOT.fetch_add(1, Ordering::Relaxed);
+    spawn_isolated_at(start, end, caps, USER_BASE + slot * USER_SLOT)
+}
+
+/// Start a user program in its OWN address space, with code at `base` and
+/// its stack in the next page. Two programs may use the same `base`: they
+/// live in different page-table trees and cannot see each other.
+pub fn spawn_isolated_at(start: usize, end: usize, caps: u32, base: u64) -> bool {
+    let len = end.wrapping_sub(start);
+    if len == 0 || len > USER_MAX_CODE {
+        return false;
+    }
+
+    let p4 = match memory::new_address_space() {
+        Some(p) => p,
+        None => return false,
+    };
+
+    // Code page: readable and executable, never writable (W^X from the start).
+    let code_frame = match memory::map_user_in(p4, base, false, true) {
+        Some(f) => f,
+        None => return false,
+    };
+    // Stack page: writable, never executable.
+    if memory::map_user_in(p4, base + 0x1000, true, false).is_none() {
+        return false;
+    }
+
+    // SAFETY: start..end are this kernel image's own program bytes, and the
+    // length was checked above.
+    let code = unsafe { core::slice::from_raw_parts(start as *const u8, len) };
+    memory::copy_to_frame(code_frame, 0, code);
+    let user_stack_top = base + 0x2000;
+
+    // This thread's own guarded kernel stack (used when it arrives from ring 3).
+    let (kstack, top) = new_guarded_stack();
+    let frame = top - 40;
+    let regs = frame - 15 * 8;
+
+    // SAFETY: both ranges lie inside the kernel stack we just allocated. We
+    // build a frame that makes the first iretq enter ring 3 at `base`.
+    unsafe {
+        let r = regs as *mut u64;
+        for i in 0..15 {
+            r.add(i).write(0);
+        }
+        let f = frame as *mut u64;
+        f.add(0).write(base); // RIP: start of the code page
+        f.add(1).write(crate::gdt::user_code_selector() as u64); // CS (ring 3)
+        f.add(2).write(0x202); // RFLAGS: interrupts enabled, IOPL 0
+        f.add(3).write(user_stack_top); // RSP: top of the stack page
+        f.add(4).write(crate::gdt::user_data_selector() as u64); // SS (ring 3)
+    }
+
+    interrupts::without_interrupts(|| {
+        if let Some(s) = SCHEDULER.lock().as_mut() {
+            s.threads.push(Thread {
+                rsp: regs,
+                caps,
+                filter: crate::syscall::FILTER_ALL,
+                cr3: p4.start_address().as_u64(),
+                kstack_top: top,
+                dead: false,
+                _stack: kstack,
+            });
+            let idx = s.threads.len() - 1;
+            crate::audit::record(crate::audit::START, idx as u8, caps as u64);
+            if let Some(slot) = USER_BASES.get(idx) {
+                slot.store(base, Ordering::Relaxed);
+            }
+        }
+    });
+    true
+}

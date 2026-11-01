@@ -3,3 +3,4 @@ build-error.txt
 build-error.txt
 src/auth_config.rs
 serial.log
+qemu.log

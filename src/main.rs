@@ -275,6 +275,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     fs::init();
 
     memory::install(mapper, frame_allocator);
+    memory::record_kernel_p4();
     let hardening: &[u8] = if nx {
         b"Hardening: NX on, user code read-only"
     } else {
@@ -298,6 +299,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     apps::start_hardening_demo();
     apps::start_filter_demo();
     apps::start_audit_demo();
+    apps::start_isolation_demo();
+    memory::show_spaces();
     scheduler::spawn(audit::monitor, syscall::CAP_ALL);
     memory::show_guards();
     
@@ -324,6 +327,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
+
 
 
 

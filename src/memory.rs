@@ -234,3 +234,124 @@ pub fn show_guards() {
     crate::put_num(3, 60, n as u64, crate::WHITE);
     crate::put_str(3, 58, b"Guard pages:", crate::CYAN);
 }
+
+// ---- M1a: per-process address spaces ----
+static KERNEL_P4: AtomicU64 = AtomicU64::new(0);
+static SPACES: AtomicUsize = AtomicUsize::new(0);
+/// The level-4 slot that holds all user memory (0x5555_0000_0000 >> 39).
+const USER_P4_INDEX: usize = 170;
+
+/// Remember the kernel's own level-4 table. Call once at boot, before any
+/// process address space exists.
+pub fn record_kernel_p4() {
+    let (frame, _) = Cr3::read();
+    KERNEL_P4.store(frame.start_address().as_u64(), Ordering::Relaxed);
+}
+
+/// Create a private address space: a copy of the kernel's top-level table
+/// with the user-region slot left EMPTY. Kernel memory is shared (same
+/// sub-tables); user memory exists only in the tree that maps it.
+pub fn new_address_space() -> Option<PhysFrame> {
+    let mut guard = MANAGER.lock();
+    let m = guard.as_mut()?;
+    let kernel_p4 = KERNEL_P4.load(Ordering::Relaxed);
+    if kernel_p4 == 0 {
+        return None;
+    }
+    let frame = m.frames.allocate_frame()?;
+    let off = m.mapper.phys_offset();
+    // SAFETY: both tables are 4 KB frames reachable through the kernel's
+    // window onto physical memory. The new frame is fresh, so nothing else
+    // uses it, and we only read the kernel's table.
+    unsafe {
+        let src = (off + kernel_p4).as_ptr::<PageTable>();
+        let dst = (off + frame.start_address().as_u64()).as_mut_ptr::<PageTable>();
+        (*dst).zero();
+        for i in 0..512 {
+            if i != USER_P4_INDEX {
+                (&mut *dst)[i] = (&*src)[i].clone();
+            }
+        }
+    }
+    SPACES.fetch_add(1, Ordering::Relaxed);
+    Some(frame)
+}
+
+/// Map one fresh, zeroed page at `addr` inside the address space `p4`, with
+/// its FINAL permissions (writable XOR executable). Returns the frame so the
+/// kernel can fill it through its own window.
+pub fn map_user_in(p4: PhysFrame, addr: u64, writable: bool, executable: bool) -> Option<PhysFrame> {
+    let mut guard = MANAGER.lock();
+    let m = guard.as_mut()?;
+    let off = m.mapper.phys_offset();
+    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(addr));
+    let frame = m.frames.allocate_frame()?;
+
+    let mut flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
+    if writable {
+        flags |= PageTableFlags::WRITABLE;
+    }
+    if !executable {
+        flags |= PageTableFlags::NO_EXECUTE;
+    }
+    let parent = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+
+    // SAFETY: the frame is fresh. We zero it through the kernel's own
+    // window, then map it into the process tree `p4`, which is not the
+    // active one, so no TLB flush is needed.
+    unsafe {
+        core::ptr::write_bytes((off + frame.start_address().as_u64()).as_mut_ptr::<u8>(), 0, 4096);
+        let table = &mut *((off + p4.start_address().as_u64()).as_mut_ptr::<PageTable>());
+        let mut mapper = OffsetPageTable::new(table, off);
+        mapper
+            .map_to_with_table_flags(page, frame, flags, parent, &mut m.frames)
+            .ok()?
+            .ignore();
+    }
+    Some(frame)
+}
+
+/// Copy bytes into a frame through the kernel's window onto physical memory.
+pub fn copy_to_frame(frame: PhysFrame, offset: usize, bytes: &[u8]) {
+    if offset > 4096 || bytes.len() > 4096 - offset {
+        return;
+    }
+    let off = match MANAGER.lock().as_ref() {
+        Some(m) => m.mapper.phys_offset(),
+        None => return,
+    };
+    // SAFETY: the destination lies inside one frame we own; the bounds were
+    // checked above; the source is a normal kernel slice.
+    unsafe {
+        let dst = (off + frame.start_address().as_u64() + offset as u64).as_mut_ptr::<u8>();
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
+    }
+}
+
+/// Load a thread's page-table root (0 = the kernel's own). Called by the
+/// scheduler on every thread switch, with interrupts off.
+pub fn switch_address_space(cr3: u64) {
+    let target = if cr3 != 0 { cr3 } else { KERNEL_P4.load(Ordering::Relaxed) };
+    if target == 0 {
+        return;
+    }
+    let (current, _) = Cr3::read();
+    if current.start_address().as_u64() == target {
+        return;
+    }
+    let frame = PhysFrame::containing_address(PhysAddr::new(target));
+    // SAFETY: `target` is either the kernel's own level-4 table or one built
+    // by new_address_space, which contains every kernel mapping, so the code
+    // and stacks we are running on stay mapped across the switch.
+    unsafe {
+        Cr3::write(frame, x86_64::registers::control::Cr3Flags::empty());
+    }
+}
+
+/// Show how many private address spaces exist, on row 1.
+pub fn show_spaces() {
+    let n = SPACES.load(Ordering::Relaxed);
+    crate::put_num(1, 14, n as u64, crate::WHITE);
+    crate::put_str(1, 2, b"Address spaces:", crate::CYAN);
+}
+

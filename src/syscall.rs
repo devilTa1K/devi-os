@@ -140,6 +140,11 @@ extern "C" fn syscall_handler(num: u64, arg: u64, arg2: u64) -> u64 {
     if num == SYS_PRINT {
         // Validate the untrusted argument: printable ASCII only.
         let ch = arg as u8;
+        if ch == b'!' {
+            let b = ISO_BREACHES.fetch_add(1, Ordering::Relaxed) + 1;
+            put_num(0, 10, b, RED);
+            put_str(0, 2, b"Isolation breaches:", RED);
+        }
         if arg < 128 && ch.is_ascii_graphic() {
             let pos = OUT_POS.fetch_add(1, Ordering::Relaxed) % 24;
             put_char(12, 2 + pos, ch, CYAN);
@@ -198,4 +203,9 @@ fn log_read(ptr: u64, len: u64) -> u64 {
 
 
 
+
+
+/// Counts '!' prints. Only the isolation proof apps (M and N) print one,
+/// and only if their marker was overwritten by another process.
+static ISO_BREACHES: AtomicU64 = AtomicU64::new(0);
 
