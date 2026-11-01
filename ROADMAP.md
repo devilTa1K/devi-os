@@ -18,10 +18,12 @@ A learning and portfolio project, not production-grade.
 - [x] Stage 9d: syscall filtering, with one-way narrowing
 - [x] Stage 9e: shell passphrase for grants (masked input, lockout, audited failures); manually functionally tested
 - [x] Stage 10a: serial audit export, host-side verifier (verify-audit.ps1), forge demo for the external anchor
+- [x] Stage 10b: host-side rule-based explainer (explain-audit.ps1); reads of the secret file are logged
 
 ## In progress
-- [ ] Stage 10b: host-side plain-language explainer for the audit log
-- [ ] Stage 10c: ring-3 explainer with an AUDIT_READ capability and a log-read syscall
+
+- [ ] Stage 10c: AUDIT_READ capability and a log-read syscall with validated user pointers, plus ring-3 demo apps
+- [ ] Later (needs a program loader): a ring-3 explainer written in Rust
 
 ## Next
 
@@ -40,6 +42,9 @@ A learning and portfolio project, not production-grade.
 
 ## Build note
 - Run .\setup-auth.ps1 once to create src\auth_config.rs (gitignored) before cargo run.
+
+
+
 
 
 
