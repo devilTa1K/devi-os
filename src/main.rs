@@ -23,6 +23,7 @@ mod apps;
 mod audit;
 mod auth;
 mod auth_config;
+mod serial;
 mod fs;
 mod shell;
 mod task;
@@ -290,6 +291,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     put_str(3, 40, hw, CYAN);
     syscall::draw_panel();
     scheduler::init();
+    serial::init();
     audit::init();
     apps::start();
     apps::start_file_app();
@@ -321,6 +323,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
+
 
 
 

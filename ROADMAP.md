@@ -17,9 +17,11 @@ A learning and portfolio project, not production-grade.
 - [x] Stage 9c: guard pages under kernel stacks
 - [x] Stage 9d: syscall filtering, with one-way narrowing
 - [x] Stage 9e: shell passphrase for grants (masked input, lockout, audited failures); manually functionally tested
+- [x] Stage 10a: serial audit export, host-side verifier (verify-audit.ps1), forge demo for the external anchor
 
 ## In progress
-- [ ] Stage 10: userspace AI layer over the audit log (design first)
+- [ ] Stage 10b: host-side plain-language explainer for the audit log
+- [ ] Stage 10c: ring-3 explainer with an AUDIT_READ capability and a log-read syscall
 
 ## Next
 
@@ -27,7 +29,7 @@ A learning and portfolio project, not production-grade.
 
 ## Known limits
 - All apps share one address space (no per-process page tables yet)
-- Ring-0 code can rewrite the audit log and its hash chain; the head hash is not anchored outside the machine
+- Ring-0 code can rewrite the log and its hash chain in RAM. verify-audit.ps1 catches that only for history the host already received; an attacker can also stop sending, and the serial stream is unsigned
 - The log is a 64-entry RAM ring and is lost on reboot
 - The shell runs in ring 0. grant needs a passphrase, but tamper and repair are still open demo commands
 - SMEP is enabled but has no dedicated test
@@ -38,6 +40,9 @@ A learning and portfolio project, not production-grade.
 
 ## Build note
 - Run .\setup-auth.ps1 once to create src\auth_config.rs (gitignored) before cargo run.
+
+
+
 
 
 

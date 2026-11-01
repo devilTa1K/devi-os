@@ -161,6 +161,17 @@ fn run(line: &[u8]) {
         }
         b"smaptest" => smaptest(),
         b"overflow" => overflow(),
+        b"export" => {
+            audit::export_all();
+            out(b"audit log re-sent to", GREEN);
+            out(b"COM1 (serial.log)", GRAY);
+        }
+        b"forge" => {
+            audit::forge();
+            out(b"log forged AND rehashed", RED);
+            out(b"in-kernel check: green", RED);
+            out(b"run export; host will see", GRAY);
+        }
         b"clear" => {}
         _ => {
             out(b"unknown command", RED);
@@ -172,7 +183,7 @@ fn run(line: &[u8]) {
 fn help() {
     out(b"ls  cat <file>  log  caps", WHITE);
     out(b"grant|revoke secret", WHITE);
-    out(b"tamper repair clear help", WHITE);
+    out(b"tamper repair export forge", WHITE);
     out(b"smaptest overflow: halt", RED);
 }
 
@@ -360,3 +371,5 @@ fn finish_grant(pass: &[u8]) {
         }
     }
 }
+
+

@@ -19,4 +19,5 @@ sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 opt-level = 3
 
 [package.metadata.bootimage]
-run-args = ["-cpu", "max"]
+run-args = ["-cpu", "max", "-serial", "file:serial.log"]
+

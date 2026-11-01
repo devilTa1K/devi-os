@@ -84,6 +84,7 @@ pub fn record(kind: u8, thread: u8, arg: u64) {
         log.entries[(seq % CAP as u64) as usize] = Entry { seq, tick, kind, thread, arg, prev, hash };
         log.head = hash;
         log.count = seq + 1;
+        crate::serial::emit_line(b"DT1", seq, tick, kind, thread, arg, &prev, &hash);
     });
 }
 
@@ -328,4 +329,53 @@ pub fn newest_line(n: usize) -> Option<([u8; 22], bool)> {
 
 
 
+
+
+/// Re-send every retained entry to the serial port, tagged as a re-export.
+/// The host compares these with what it received live. Returns the count.
+pub fn export_all() -> u64 {
+    interrupts::without_interrupts(|| {
+        let log = LOG.lock();
+        let n = if log.count < CAP as u64 { log.count } else { CAP as u64 };
+        let mut s = log.count - n;
+        while s < log.count {
+            let e = &log.entries[(s % CAP as u64) as usize];
+            crate::serial::emit_line(b"DT1R", e.seq, e.tick, e.kind, e.thread, e.arg, &e.prev, &e.hash);
+            s += 1;
+        }
+        n
+    })
+}
+
+/// Demo of the attack an in-kernel check cannot see: edit an entry AND
+/// recompute every hash after it, so the chain still verifies. Irreversible
+/// until reboot. Only the host-side anchor catches it.
+pub fn forge() {
+    interrupts::without_interrupts(|| {
+        let mut log = LOG.lock();
+        if log.count < 4 || log.backup.is_some() {
+            return;
+        }
+        let target = log.count - 3;
+        let n = if log.count < CAP as u64 { log.count } else { CAP as u64 };
+        if target < log.count - n {
+            return;
+        }
+        let mut prev = log.entries[(target % CAP as u64) as usize].prev;
+        let mut s = target;
+        while s < log.count {
+            let idx = (s % CAP as u64) as usize;
+            let mut e = log.entries[idx];
+            if s == target {
+                e.arg ^= 1;
+            }
+            e.prev = prev;
+            e.hash = compute(&e.prev, e.seq, e.tick, e.kind, e.thread, e.arg);
+            prev = e.hash;
+            log.entries[idx] = e;
+            s += 1;
+        }
+        log.head = prev;
+    });
+}
 
