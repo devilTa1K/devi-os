@@ -15,6 +15,7 @@ pub const REVOKE: u8 = 6;
 pub const SANDBOX: u8 = 7;
 pub const AUTH_FAIL: u8 = 8;
 pub const READ: u8 = 9;
+pub const BADPTR: u8 = 10;
 
 /// The log keeps the newest CAP entries (a ring). The hash chain still
 /// links every entry to the one before it.
@@ -59,7 +60,7 @@ static LOG: Mutex<Log> = Mutex::new(Log {
 });
 
 /// Denial counters per (thread, syscall) so a flood cannot fill the log.
-static DENY_COUNTS: Mutex<[[u32; 4]; 16]> = Mutex::new([[0; 4]; 16]);
+static DENY_COUNTS: Mutex<[[u32; 8]; 16]> = Mutex::new([[0; 8]; 16]);
 
 /// hash = SHA-256(prev_hash || seq || tick || kind || thread || arg)
 fn compute(prev: &[u8; 32], seq: u64, tick: u64, kind: u8, thread: u8, arg: u64) -> [u8; 32] {
@@ -92,7 +93,7 @@ pub fn record(kind: u8, thread: u8, arg: u64) {
 /// Log a denied syscall, but only the first one per (thread, call) and then
 /// every 512th, so a flood of denials cannot push real evidence out.
 pub fn record_denial(thread: usize, call: u64) {
-    if call == 0 || call >= 4 {
+    if call == 0 || call >= 8 {
         return;
     }
     let t = if thread > 15 { 15 } else { thread };
@@ -145,6 +146,7 @@ fn kind_name(k: u8) -> &'static [u8; 5] {
         SANDBOX => b"SANDB",
         AUTH_FAIL => b"AUTHF",
         READ => b"READ ",
+        BADPTR => b"BADPT",
         _ => b"???? ",
     }
 }
@@ -154,6 +156,7 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (DENY, 1) => b"PRINT   ",
         (DENY, 2) => b"NETWORK ",
         (DENY, 3) => b"FILES   ",
+        (DENY, 5) => b"AUDITLOG",
         (KILL, 14) => b"PGFAULT ",
         (KILL, 13) => b"GPFAULT ",
         (KILL, 15) => b"NXFAULT ",
@@ -162,6 +165,7 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (SANDBOX, _) => b"FILTER  ",
         (AUTH_FAIL, _) => b"BAD PASS",
         (READ, _) => b"SECRET  ",
+        (BADPTR, _) => b"BAD PTR ",
         (START, _) => b"RING 3  ",
         (BOOT, _) => b"        ",
         (GRANT, _) => b"SECRET  ",
@@ -189,7 +193,7 @@ fn draw_entry(row: usize, e: &Entry) {
     buf[11] = b't';
     buf[12] = b'0' + e.thread % 10;
     buf[14..22].copy_from_slice(arg_name(e.kind, e.arg));
-    let color = if e.kind == DENY || e.kind == KILL || e.kind == AUTH_FAIL { RED } else { GRAY };
+    let color = if e.kind == DENY || e.kind == KILL || e.kind == AUTH_FAIL || e.kind == BADPTR { RED } else { GRAY };
     put_str(row, 2, &buf, color);
 }
 
@@ -316,7 +320,7 @@ pub fn newest_line(n: usize) -> Option<([u8; 22], bool)> {
         buf[11] = b't';
         buf[12] = b'0' + e.thread % 10;
         buf[14..22].copy_from_slice(arg_name(e.kind, e.arg));
-        Some((buf, e.kind == DENY || e.kind == KILL || e.kind == AUTH_FAIL))
+        Some((buf, e.kind == DENY || e.kind == KILL || e.kind == AUTH_FAIL || e.kind == BADPTR))
     })
 }
 
@@ -381,6 +385,52 @@ pub fn forge() {
         log.head = prev;
     });
 }
+
+
+
+
+
+/// Size in bytes of one record handed to ring 3:
+/// seq u32 | tick u32 | kind u8 | thread u8 | arg u16 | 4 reserved bytes.
+pub const REC_SIZE: usize = 16;
+
+/// Copy the newest `max` retained entries, oldest first, into user memory
+/// at `dst`. The caller must already have validated that
+/// [dst, dst + max * REC_SIZE) is a writable range owned by the caller.
+/// Returns the number of records copied.
+pub fn copy_to_user(dst: u64, max: usize) -> usize {
+    interrupts::without_interrupts(|| {
+        let log = LOG.lock();
+        let have = (if log.count < CAP as u64 { log.count } else { CAP as u64 }) as usize;
+        let n = if max < have { max } else { have };
+        let first = log.count - n as u64;
+        crate::memory::with_user_access(|| {
+            for i in 0..n {
+                let e = &log.entries[((first + i as u64) % CAP as u64) as usize];
+                let mut rec = [0u8; REC_SIZE];
+                rec[0..4].copy_from_slice(&(e.seq as u32).to_le_bytes());
+                rec[4..8].copy_from_slice(&(e.tick as u32).to_le_bytes());
+                rec[8] = e.kind;
+                rec[9] = e.thread;
+                rec[10..12].copy_from_slice(&(e.arg as u16).to_le_bytes());
+                // SAFETY: the caller validated the whole destination range,
+                // and we are inside the stac/clac window, so this one
+                // bounded copy is the only access to user memory.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        rec.as_ptr(),
+                        (dst as usize + i * REC_SIZE) as *mut u8,
+                        REC_SIZE,
+                    );
+                }
+            }
+        });
+        n
+    })
+}
+
+
+
 
 
 

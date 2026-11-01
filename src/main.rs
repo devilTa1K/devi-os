@@ -297,6 +297,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     apps::start_file_app();
     apps::start_hardening_demo();
     apps::start_filter_demo();
+    apps::start_audit_demo();
     scheduler::spawn(audit::monitor, syscall::CAP_ALL);
     memory::show_guards();
     
@@ -323,6 +324,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
 
 
 

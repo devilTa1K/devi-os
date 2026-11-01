@@ -6,7 +6,7 @@ param([string]$Path = "serial.log")
 $names = @{
     0 = "The console shell"; 1 = "App A (prints)"; 2 = "App B (no capabilities)";
     3 = "App C"; 4 = "App D"; 5 = "App E (file reader)"; 6 = "App F"; 7 = "App G";
-    8 = "App H"; 9 = "App I"
+    8 = "App H"; 9 = "App I"; 10 = "App J (log reader)"; 11 = "App K (bad pointers)"; 12 = "App L (no audit capability)"
 }
 
 function Who($t) {
@@ -15,7 +15,7 @@ function Who($t) {
     return "Thread $k"
 }
 function CallName($n) {
-    switch ([int]$n) { 1 { "PRINT" } 2 { "NETWORK" } 3 { "FILES" } default { "unknown call $n" } }
+    switch ([int]$n) { 1 { "PRINT" } 2 { "NETWORK" } 3 { "FILES" } 5 { "AUDIT_READ" } default { "unknown call $n" } }
 }
 function CapList($bits) {
     $b = [int64]$bits
@@ -24,6 +24,7 @@ function CapList($bits) {
     if ($b -band 2) { $l += "NETWORK" }
     if ($b -band 4) { $l += "FILES" }
     if ($b -band 8) { $l += "SECRET" }
+    if ($b -band 16) { $l += "AUDIT_READ" }
     if ($l.Count -eq 0) { return "no capabilities" }
     return ($l -join ", ")
 }
@@ -56,7 +57,7 @@ function DenySentence($e) {
     $held = 0
     if ($threadCaps.ContainsKey([int]$e.Thread)) { $held = [int64]$threadCaps[[int]$e.Thread] }
     $needBit = 0
-    if ([int]$e.Arg -eq 1) { $needBit = 1 } elseif ([int]$e.Arg -eq 2) { $needBit = 2 } elseif ([int]$e.Arg -eq 3) { $needBit = 4 }
+    if ([int]$e.Arg -eq 1) { $needBit = 1 } elseif ([int]$e.Arg -eq 2) { $needBit = 2 } elseif ([int]$e.Arg -eq 3) { $needBit = 4 } elseif ([int]$e.Arg -eq 5) { $needBit = 16 }
     if ($needBit -ne 0 -and ($held -band $needBit)) {
         return "$who asked for the $call service but was refused. It already holds $call, so the file it asked for needs another capability (most likely SECRET); the log does not say which file."
     }
@@ -73,6 +74,15 @@ function SandboxSentence($e) {
     return "$who narrowed its own syscall filter. It may now only call: $(FilterList $e.Arg). This cannot be undone."
 }
 
+function PtrText($a) {
+    $v = [uint64]$a
+    $hex = '0x{0:x}' -f $v
+    if ($v -eq 0xb8000) { return "$hex, the kernel's screen buffer" }
+    if ($v -ge 0x555500000000 -and $v -lt 0x555600000000) { return "$hex, user memory but outside this app's own buffer" }
+    if ($v -ge [uint64]'18446744073709551360') { return "$hex, at the very top of memory, so pointer plus length would overflow" }
+    return $hex
+}
+
 function Sentence($e) {
     $who = Who $e.Thread
     switch ($e.Kind) {
@@ -85,6 +95,7 @@ function Sentence($e) {
         7 { return SandboxSentence $e }
         8 { return "A wrong passphrase was typed at the console (failure number $($e.Arg))." }
         9 { return "$who read the secret file." }
+        10 { return "$who passed a pointer the kernel refused (it pointed outside the thread's own buffer). Nothing was written. Pointer: $(PtrText $e.Arg)." }
         default { return "Unknown event type $($e.Kind)." }
     }
 }
@@ -105,7 +116,7 @@ foreach ($line in ($raw -split "`n")) {
     $seq = [int64]$p[1]
     if ($seen.ContainsKey($seq)) { continue }
     $seen[$seq] = $true
-    $entries += [pscustomobject]@{ Seq = $seq; Tick = [int64]$p[2]; Kind = [int]$p[3]; Thread = [int]$p[4]; Arg = [int64]$p[5] }
+    $entries += [pscustomobject]@{ Seq = $seq; Tick = [int64]$p[2]; Kind = [int]$p[3]; Thread = [int]$p[4]; Arg = [uint64]$p[5] }
 }
 
 # Integrity first: an explanation of a tampered log is not trustworthy.
@@ -125,6 +136,17 @@ if ($bad -gt 0) {
 }
 
 if ($entries.Count -eq 0) { "No audit entries yet."; return }
+
+$missing = @()
+$firstSeq = $entries[0].Seq
+$lastSeq = $entries[$entries.Count - 1].Seq
+for ($s = $firstSeq; $s -le $lastSeq; $s++) {
+    if (-not $seen.ContainsKey([int64]$s)) { $missing += $s }
+}
+if ($missing.Count -gt 0) {
+    "WARNING: these entries are missing from the stream and are NOT explained below: #" + ($missing -join ", #")
+    ""
+}
 
 "== Timeline =="
 foreach ($e in $entries) {
@@ -178,6 +200,11 @@ foreach ($r in $reads) {
     $any = $true
     "- " + (Who $r.Thread) + " read the secret file (entry #" + $r.Seq + ")."
 }
+$bp = @($entries | Where-Object { $_.Kind -eq 10 })
+foreach ($g in ($bp | Group-Object Thread)) {
+    $any = $true
+    "- " + (Who ([int]$g.Name)) + " passed " + $g.Count + " pointers the kernel refused. A refused pointer is never written to."
+}
 if (-not $any) { "- Nothing unusual in this log." }
 
 
@@ -193,3 +220,13 @@ if (-not $any) { "- Nothing unusual in this log." }
 "- A refused FILES call does not say which file was requested."
 "- Names such as App A are demo labels in this script, not read from the log."
 "- This is a rule-based summary of the log. It cannot tell an attack from a bug."
+
+
+
+
+
+
+
+
+
+

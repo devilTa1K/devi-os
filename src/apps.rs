@@ -259,3 +259,124 @@ pub fn start_filter_demo() {
         put_str(24, 55, b"FILTER APPS FAILED", RED);
     }
 }
+
+core::arch::global_asm!(r#"
+    .text
+
+    .global user_prog_j_start
+    .global user_prog_j_end
+user_prog_j_start:
+    mov rcx, 600000000
+.Lj_wait:
+    dec rcx
+    jnz .Lj_wait
+.Lj_loop:
+    lea rdi, [rsp - 256]
+    mov rsi, 256
+    mov rax, 5
+    int 0x80
+    cmp rax, 2
+    jb .Lj_delay
+    cmp rax, 16
+    ja .Lj_delay
+    lea rbx, [rsp - 256]
+    mov edx, dword ptr [rbx + 16]
+    mov ecx, dword ptr [rbx]
+    inc ecx
+    cmp edx, ecx
+    jne .Lj_delay
+    mov rax, 1
+    mov rdi, 86
+    int 0x80
+.Lj_delay:
+    mov rcx, 20000000
+.Lj_d2:
+    dec rcx
+    jnz .Lj_d2
+    jmp .Lj_loop
+user_prog_j_end:
+
+    .global user_prog_k_start
+    .global user_prog_k_end
+user_prog_k_start:
+    mov r8, rsp
+    mov rcx, 900000000
+.Lk_wait:
+    dec rcx
+    jnz .Lk_wait
+.Lk_loop:
+    mov rax, 5
+    mov rdi, 0xb8000
+    mov rsi, 256
+    int 0x80
+    mov rax, 5
+    mov rdi, 0x555500001000
+    mov rsi, 256
+    int 0x80
+    mov rax, 5
+    lea rdi, [r8 - 8]
+    mov rsi, 64
+    int 0x80
+    mov rax, 5
+    mov rdi, 0xFFFFFFFFFFFFFFF0
+    mov rsi, 256
+    int 0x80
+    mov rax, 5
+    lea rdi, [r8 - 0x2000]
+    mov rsi, 256
+    int 0x80
+    mov rcx, 60000000
+.Lk_d2:
+    dec rcx
+    jnz .Lk_d2
+    jmp .Lk_loop
+user_prog_k_end:
+
+    .global user_prog_l_start
+    .global user_prog_l_end
+user_prog_l_start:
+    mov rcx, 700000000
+.Ll_wait:
+    dec rcx
+    jnz .Ll_wait
+.Ll_loop:
+    lea rdi, [rsp - 256]
+    mov rsi, 256
+    mov rax, 5
+    int 0x80
+    mov rcx, 90000000
+.Ll_d2:
+    dec rcx
+    jnz .Ll_d2
+    jmp .Ll_loop
+user_prog_l_end:
+"#);
+
+unsafe extern "C" {
+    static user_prog_j_start: u8;
+    static user_prog_j_end: u8;
+    static user_prog_k_start: u8;
+    static user_prog_k_end: u8;
+    static user_prog_l_start: u8;
+    static user_prog_l_end: u8;
+}
+
+/// App J reads the log (allowed). App K holds the capability too but passes
+/// five bad pointers (the pointer check is its only obstacle). App L has no
+/// capability at all.
+pub fn start_audit_demo() {
+    let j0 = (&raw const user_prog_j_start) as usize;
+    let j1 = (&raw const user_prog_j_end) as usize;
+    let k0 = (&raw const user_prog_k_start) as usize;
+    let k1 = (&raw const user_prog_k_end) as usize;
+    let l0 = (&raw const user_prog_l_start) as usize;
+    let l1 = (&raw const user_prog_l_end) as usize;
+
+    let caps = crate::syscall::CAP_PRINT | crate::syscall::CAP_AUDIT;
+    let ok_j = spawn_user(j0, j1, caps);
+    let ok_k = spawn_user(k0, k1, caps);
+    let ok_l = spawn_user(l0, l1, 0);
+    if !(ok_j && ok_k && ok_l) {
+        put_str(24, 55, b"AUDIT APPS FAILED", RED);
+    }
+}

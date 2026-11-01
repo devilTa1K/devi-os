@@ -6,6 +6,7 @@ pub const CAP_PRINT: u32 = 1 << 0;
 pub const CAP_NETWORK: u32 = 1 << 1;
 pub const CAP_FILES: u32 = 1 << 2;
 pub const CAP_SECRET: u32 = 1 << 3;
+pub const CAP_AUDIT: u32 = 1 << 4;
 pub const CAP_ALL: u32 = u32::MAX;
 
 // Syscall numbers (in rax). The argument goes in rdi.
@@ -13,9 +14,10 @@ pub const SYS_PRINT: u64 = 1;
 pub const SYS_NETWORK: u64 = 2;
 pub const SYS_FILES: u64 = 3;
 pub const SYS_SANDBOX: u64 = 4;
+pub const SYS_LOG_READ: u64 = 5;
 
 /// Every call a thread may make by default: one bit per call number (1..4).
-pub const FILTER_ALL: u32 = 0b1_1110;
+pub const FILTER_ALL: u32 = 0b11_1110;
 
 // Results (returned in rax).
 pub const OK: u64 = 0;
@@ -63,6 +65,7 @@ pub extern "C" fn syscall_entry() {
         "push r10",
         "push r11",
         "sub rsp, 8",
+        "mov rdx, rsi",
         "mov rsi, rdi",
         "mov rdi, rax",
         "call {handler}",
@@ -80,7 +83,7 @@ pub extern "C" fn syscall_entry() {
     );
 }
 
-extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
+extern "C" fn syscall_handler(num: u64, arg: u64, arg2: u64) -> u64 {
     // Stage 9d: the filter runs BEFORE capabilities. A call outside the
     // thread's filter is not an error to return: it kills the thread.
     let filter = match crate::scheduler::current_filter() {
@@ -105,6 +108,7 @@ extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
         SYS_PRINT => (CAP_PRINT, b"PRINT   "),
         SYS_NETWORK => (CAP_NETWORK, b"NETWORK "),
         SYS_FILES => (crate::fs::required_cap(arg), b"FILES   "),
+        SYS_LOG_READ => (CAP_AUDIT, b"AUDITLOG"),
         _ => return UNKNOWN,
     };
 
@@ -129,6 +133,10 @@ extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
         return crate::fs::read(crate::scheduler::current_id(), arg);
     }
 
+    if num == SYS_LOG_READ {
+        return log_read(arg, arg2);
+    }
+
     if num == SYS_PRINT {
         // Validate the untrusted argument: printable ASCII only.
         let ch = arg as u8;
@@ -138,6 +146,51 @@ extern "C" fn syscall_handler(num: u64, arg: u64) -> u64 {
         }
     }
     OK
+}
+
+
+
+
+
+
+
+
+pub const BADPTR_RESULT: u64 = u64::MAX - 2;
+static BADPTR_COUNT: AtomicU64 = AtomicU64::new(0);
+static LOG_READS_OK: AtomicU64 = AtomicU64::new(0);
+
+/// Reject an untrusted pointer: log it (sampled) and report the failure.
+/// Nothing was written, and the caller is not killed.
+fn reject(ptr: u64) -> u64 {
+    let n = BADPTR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if n <= 8 || n % 512 == 0 {
+        let tid = crate::scheduler::current_id();
+        crate::audit::record(crate::audit::BADPTR, tid as u8, ptr);
+    }
+    BADPTR_RESULT
+}
+
+/// SYS_LOG_READ: copy the newest audit records into the caller's buffer.
+/// rdi = pointer, rsi = length in bytes. The pointer is UNTRUSTED. The whole
+/// range must lie inside the caller's own writable stack page.
+fn log_read(ptr: u64, len: u64) -> u64 {
+    let (start, end) = match crate::scheduler::current_user_buffer() {
+        Some(r) => r,
+        None => return DENIED,
+    };
+    let rec = crate::audit::REC_SIZE as u64;
+    let stop = match ptr.checked_add(len) {
+        Some(s) => s,
+        None => return reject(ptr),
+    };
+    if len < rec || len > 4096 || ptr < start || stop > end {
+        return reject(ptr);
+    }
+    let copied = crate::audit::copy_to_user(ptr, (len / rec) as usize) as u64;
+    let ok = LOG_READS_OK.fetch_add(1, Ordering::Relaxed) + 1;
+    put_num(7, 14, ok, WHITE);
+    put_str(7, 2, b"Log reads ok:", GRAY);
+    copied
 }
 
 

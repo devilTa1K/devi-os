@@ -19,10 +19,11 @@ A learning and portfolio project, not production-grade.
 - [x] Stage 9e: shell passphrase for grants (masked input, lockout, audited failures); manually functionally tested
 - [x] Stage 10a: serial audit export, host-side verifier (verify-audit.ps1), forge demo for the external anchor
 - [x] Stage 10b: host-side rule-based explainer (explain-audit.ps1); reads of the secret file are logged
+- [x] Stage 10c: AUDIT_READ capability and a log-read syscall with validated user pointers (ring-3 apps J, K, L)
 
 ## In progress
 
-- [ ] Stage 10c: AUDIT_READ capability and a log-read syscall with validated user pointers, plus ring-3 demo apps
+
 - [ ] Later (needs a program loader): a ring-3 explainer written in Rust
 
 ## Next
@@ -53,3 +54,14 @@ A learning and portfolio project, not production-grade.
 
 
 
+
+
+
+## Next phase: run your own text-mode programs (M1)
+- [ ] M1a: per-process address spaces (own page tables, shared kernel half)
+- [ ] M1b: separately built Rust user programs (flat binary, own crate)
+- [ ] M1c: ELF loader with strict validation
+- [ ] M1d: program syscalls: write, read_line, exit (copy_from_user and copy_to_user)
+- [ ] M1e: process lifecycle: exit, free memory, run from the shell, ps, kill
+- [ ] M1f: manifest capabilities; the audit log records the SHA-256 of each program started
+- [ ] M1g: a small user library and sample programs (echo, calc, notes)

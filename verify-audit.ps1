@@ -34,7 +34,7 @@ foreach ($line in ($text -split "`n")) {
     if ($p[6].Length -ne 64 -or $p[7].Length -ne 64) { continue }   # partial line
 
     $seq = [int64]$p[1]; $tick = [int64]$p[2]
-    $kind = [byte]$p[3]; $thread = [byte]$p[4]; $arg = [int64]$p[5]
+    $kind = [byte]$p[3]; $thread = [byte]$p[4]; $arg = [uint64]$p[5]
     $prev = $p[6]; $hash = $p[7]
 
     $buf = [byte[]]((HexToBytes $prev) + [BitConverter]::GetBytes($seq) + [BitConverter]::GetBytes($tick) + @($kind, $thread) + [BitConverter]::GetBytes($arg))
@@ -74,3 +74,4 @@ foreach ($line in ($text -split "`n")) {
 "live entries: $live   re-exported: $reexp   problems: $problems"
 if ($problems -eq 0 -and $reexp -gt 0) { "OK: everything the kernel re-exports matches what it reported live." }
 if ($reexp -eq 0) { "No re-export yet. Type export in the DevilTalk shell, then run this again." }
+

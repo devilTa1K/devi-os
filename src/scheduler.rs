@@ -173,6 +173,7 @@ pub fn spawn_user(start: usize, end: usize, caps: u32) -> bool {
         if let Some(s) = SCHEDULER.lock().as_mut() {
             s.threads.push(Thread { rsp: regs, caps, filter: crate::syscall::FILTER_ALL, kstack_top: top, dead: false, _stack: kstack });
             crate::audit::record(crate::audit::START, (s.threads.len() - 1) as u8, caps as u64);
+            USER_BASES[s.threads.len() - 1].store(base, Ordering::Relaxed);
         }
     });
     true
@@ -274,4 +275,22 @@ pub fn narrow_filter(mask: u32) -> Option<u32> {
 
 
 
+
+
+/// One slot per thread: the base address of its user memory (0 = none).
+static USER_BASES: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+
+/// The only user range the running thread may hand to the kernel as a
+/// writable buffer: its own stack page. Returns (start, end).
+pub fn current_user_buffer() -> Option<(u64, u64)> {
+    let id = match SCHEDULER.try_lock() {
+        Some(guard) => guard.as_ref().map(|s| s.current)?,
+        None => return None,
+    };
+    let base = USER_BASES.get(id)?.load(Ordering::Relaxed);
+    if base == 0 {
+        return None;
+    }
+    Some((base + 0x1000, base + 0x2000))
+}
 
