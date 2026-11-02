@@ -140,6 +140,11 @@ extern "C" fn syscall_handler(num: u64, arg: u64, arg2: u64) -> u64 {
     if num == SYS_PRINT {
         // Validate the untrusted argument: printable ASCII only.
         let ch = arg as u8;
+        if ch == b'?' {
+            let c = CONTROL_HITS.fetch_add(1, Ordering::Relaxed) + 1;
+            put_num(0, 47, c, CYAN);
+            put_str(0, 24, b"Control (should climb):", CYAN);
+        }
         if ch == b'!' {
             let b = ISO_BREACHES.fetch_add(1, Ordering::Relaxed) + 1;
             put_num(0, 10, b, RED);
@@ -208,4 +213,8 @@ fn log_read(ptr: u64, len: u64) -> u64 {
 /// Counts '!' prints. Only the isolation proof apps (M and N) print one,
 /// and only if their marker was overwritten by another process.
 static ISO_BREACHES: AtomicU64 = AtomicU64::new(0);
+
+
+/// Counts '?' prints from the shared-page control apps (P and Q). It SHOULD climb.
+static CONTROL_HITS: AtomicU64 = AtomicU64::new(0);
 

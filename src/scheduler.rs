@@ -281,7 +281,7 @@ pub fn narrow_filter(mask: u32) -> Option<u32> {
 
 
 /// One slot per thread: the base address of its user memory (0 = none).
-static USER_BASES: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+static USER_BASES: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
 
 /// The only user range the running thread may hand to the kernel as a
 /// writable buffer: its own stack page. Returns (start, end).
@@ -377,3 +377,16 @@ pub fn spawn_isolated_at(start: usize, end: usize, caps: u32, base: u64) -> bool
     });
     true
 }
+
+/// Page-table root of the thread created most recently (0 if none).
+pub fn last_cr3() -> u64 {
+    match SCHEDULER.try_lock() {
+        Some(guard) => guard
+            .as_ref()
+            .and_then(|s| s.threads.last())
+            .map(|t| t.cr3)
+            .unwrap_or(0),
+        None => 0,
+    }
+}
+

@@ -60,7 +60,7 @@ static LOG: Mutex<Log> = Mutex::new(Log {
 });
 
 /// Denial counters per (thread, syscall) so a flood cannot fill the log.
-static DENY_COUNTS: Mutex<[[u32; 8]; 16]> = Mutex::new([[0; 8]; 16]);
+static DENY_COUNTS: Mutex<[[u32; 8]; 32]> = Mutex::new([[0; 8]; 32]);
 
 /// hash = SHA-256(prev_hash || seq || tick || kind || thread || arg)
 fn compute(prev: &[u8; 32], seq: u64, tick: u64, kind: u8, thread: u8, arg: u64) -> [u8; 32] {
@@ -96,7 +96,7 @@ pub fn record_denial(thread: usize, call: u64) {
     if call == 0 || call >= 8 {
         return;
     }
-    let t = if thread > 15 { 15 } else { thread };
+    let t = if thread > 31 { 31 } else { thread };
     let n = interrupts::without_interrupts(|| {
         let mut counts = DENY_COUNTS.lock();
         let slot = &mut counts[t][call as usize];
@@ -428,6 +428,8 @@ pub fn copy_to_user(dst: u64, max: usize) -> usize {
         n
     })
 }
+
+
 
 
 

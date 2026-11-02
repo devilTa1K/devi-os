@@ -189,7 +189,7 @@ pub fn with_user_access<R>(f: impl FnOnce() -> R) -> R {
 // ---- Stage 9c: kernel stack guard pages ----
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 
-const MAX_GUARDS: usize = 16;
+const MAX_GUARDS: usize = 32;
 static GUARDS: [AtomicU64; MAX_GUARDS] = [const { AtomicU64::new(0) }; MAX_GUARDS];
 static GUARD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -353,5 +353,60 @@ pub fn show_spaces() {
     let n = SPACES.load(Ordering::Relaxed);
     crate::put_num(1, 14, n as u64, crate::WHITE);
     crate::put_str(1, 2, b"Address spaces:", crate::CYAN);
+}
+
+
+static SHARED_FRAME: AtomicU64 = AtomicU64::new(0);
+
+/// Map ONE physical frame, shared by every caller, at `addr` inside the
+/// address space whose level-4 table is at `p4_phys`. The page is writable
+/// but never executable. This is a DELIBERATE hole in isolation, used only
+/// by the negative control.
+pub fn map_shared_in(p4_phys: u64, addr: u64) -> bool {
+    if p4_phys == 0 || p4_phys == KERNEL_P4.load(Ordering::Relaxed) {
+        return false;
+    }
+    let mut guard = MANAGER.lock();
+    let m = match guard.as_mut() {
+        Some(m) => m,
+        None => return false,
+    };
+    let off = m.mapper.phys_offset();
+
+    let mut fr = SHARED_FRAME.load(Ordering::Relaxed);
+    if fr == 0 {
+        let f = match m.frames.allocate_frame() {
+            Some(f) => f,
+            None => return false,
+        };
+        fr = f.start_address().as_u64();
+        // SAFETY: the frame is fresh; we zero it through the kernel's window.
+        unsafe {
+            core::ptr::write_bytes((off + fr).as_mut_ptr::<u8>(), 0, 4096);
+        }
+        SHARED_FRAME.store(fr, Ordering::Relaxed);
+    }
+
+    let frame = PhysFrame::containing_address(PhysAddr::new(fr));
+    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(addr));
+    let flags = PageTableFlags::PRESENT
+        | PageTableFlags::USER_ACCESSIBLE
+        | PageTableFlags::WRITABLE
+        | PageTableFlags::NO_EXECUTE;
+    let parent = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+
+    // SAFETY: p4_phys is a process table built by new_address_space (never
+    // the kernel's own, checked above) and is not the active one.
+    unsafe {
+        let table = &mut *((off + p4_phys).as_mut_ptr::<PageTable>());
+        let mut mapper = OffsetPageTable::new(table, off);
+        match mapper.map_to_with_table_flags(page, frame, flags, parent, &mut m.frames) {
+            Ok(flush) => {
+                flush.ignore();
+                true
+            }
+            Err(_) => false,
+        }
+    }
 }
 

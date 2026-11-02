@@ -6,7 +6,7 @@ param([string]$Path = "serial.log")
 $names = @{
     0 = "The console shell"; 1 = "App A (prints)"; 2 = "App B (no capabilities)";
     3 = "App C"; 4 = "App D"; 5 = "App E (file reader)"; 6 = "App F"; 7 = "App G";
-    8 = "App H"; 9 = "App I"; 10 = "App J (log reader)"; 11 = "App K (bad pointers)"; 12 = "App L (no audit capability)"; 13 = "Process M (isolation check)"; 14 = "Process N (reads another process)"
+    8 = "App H"; 9 = "App I"; 10 = "App J (log reader)"; 11 = "App K (bad pointers)"; 12 = "App L (no audit capability)"; 13 = "Process M (isolation check)"; 14 = "Process N (reads another process)"; 15 = "Process P (shared-page control)"; 16 = "Process Q (shared-page control)"
 }
 
 function Who($t) {
@@ -220,6 +220,7 @@ if (-not $any) { "- Nothing unusual in this log." }
 "- A refused FILES call does not say which file was requested."
 "- Names such as App A are demo labels in this script, not read from the log."
 "- This is a rule-based summary of the log. It cannot tell an attack from a bug."
+
 
 
 

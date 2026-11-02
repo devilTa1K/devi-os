@@ -465,3 +465,91 @@ pub fn start_isolation_demo() {
     }
 }
 
+
+core::arch::global_asm!(r#"
+    .text
+
+    .global user_prog_p_start
+    .global user_prog_p_end
+user_prog_p_start:
+    mov rbx, 0x5050505050505050
+    mov r8, 0x555504002000
+    mov qword ptr [r8], rbx
+.Lp_loop:
+    mov rdx, qword ptr [r8]
+    cmp rdx, rbx
+    jne .Lp_diff
+    mov rdi, 112
+    jmp .Lp_print
+.Lp_diff:
+    mov rdi, 63
+.Lp_print:
+    mov rax, 1
+    int 0x80
+    mov rcx, 20000000
+.Lp_d:
+    dec rcx
+    jnz .Lp_d
+    jmp .Lp_loop
+user_prog_p_end:
+
+    .global user_prog_q_start
+    .global user_prog_q_end
+user_prog_q_start:
+    mov rbx, 0x5151515151515151
+    mov r8, 0x555504002000
+    mov qword ptr [r8], rbx
+.Lq_loop:
+    mov rdx, qword ptr [r8]
+    cmp rdx, rbx
+    jne .Lq_diff
+    mov rdi, 113
+    jmp .Lq_print
+.Lq_diff:
+    mov rdi, 63
+.Lq_print:
+    mov rax, 1
+    int 0x80
+    mov rcx, 20000000
+.Lq_d:
+    dec rcx
+    jnz .Lq_d
+    jmp .Lq_loop
+user_prog_q_end:
+"#);
+
+unsafe extern "C" {
+    static user_prog_p_start: u8;
+    static user_prog_p_end: u8;
+    static user_prog_q_start: u8;
+    static user_prog_q_end: u8;
+}
+
+/// NEGATIVE CONTROL. P and Q run at the same address in separate address
+/// spaces, then are DELIBERATELY given one shared page (at base + 0x2000).
+/// Each writes its marker there and keeps checking it, so the overwritten one
+/// prints '?' on every check. The control counter on row 0 must climb. If it
+/// does not, the isolation counter's zero proves nothing.
+pub fn start_shared_control() {
+    const CONTROL_BASE: u64 = 0x5555_0400_0000;
+    const SHARED_ADDR: u64 = CONTROL_BASE + 0x2000;
+    let p0 = (&raw const user_prog_p_start) as usize;
+    let p1 = (&raw const user_prog_p_end) as usize;
+    let q0 = (&raw const user_prog_q_start) as usize;
+    let q1 = (&raw const user_prog_q_end) as usize;
+
+    let ok = x86_64::instructions::interrupts::without_interrupts(|| {
+        let ok_p = crate::scheduler::spawn_isolated_at(p0, p1, crate::syscall::CAP_PRINT, CONTROL_BASE);
+        let cr3_p = crate::scheduler::last_cr3();
+        let ok_q = crate::scheduler::spawn_isolated_at(q0, q1, crate::syscall::CAP_PRINT, CONTROL_BASE);
+        let cr3_q = crate::scheduler::last_cr3();
+        ok_p && ok_q
+            && crate::memory::map_shared_in(cr3_p, SHARED_ADDR)
+            && crate::memory::map_shared_in(cr3_q, SHARED_ADDR)
+    });
+    put_num(0, 47, 0, CYAN);
+    put_str(0, 24, b"Control (should climb):", CYAN);
+    if !ok {
+        put_str(24, 55, b"SHARED CONTROL FAILED", RED);
+    }
+}
