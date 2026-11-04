@@ -4,3 +4,6 @@ build-error.txt
 src/auth_config.rs
 serial.log
 qemu.log
+user/hello/target/
+user/hello/*.elf
+user/hello/*.bin
