@@ -15,6 +15,7 @@ use x86_64::VirtAddr;
 
 mod allocator;
 mod gdt;
+mod elf;
 mod interrupts;
 mod memory;
 mod scheduler;
@@ -24,6 +25,7 @@ mod audit;
 mod auth;
 mod auth_config;
 mod serial;
+mod programs;
 mod fs;
 mod shell;
 mod task;
@@ -276,6 +278,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     memory::install(mapper, frame_allocator);
     memory::record_kernel_p4();
+    elf::self_test();
     let hardening: &[u8] = if nx {
         b"Hardening: NX on, user code read-only"
     } else {
@@ -328,6 +331,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
+
+
 
 
 

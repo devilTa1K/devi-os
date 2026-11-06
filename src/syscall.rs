@@ -15,9 +15,10 @@ pub const SYS_NETWORK: u64 = 2;
 pub const SYS_FILES: u64 = 3;
 pub const SYS_SANDBOX: u64 = 4;
 pub const SYS_LOG_READ: u64 = 5;
+pub const SYS_WRITE: u64 = 6;
 
 /// Every call a thread may make by default: one bit per call number (1..4).
-pub const FILTER_ALL: u32 = 0b11_1110;
+pub const FILTER_ALL: u32 = 0b111_1110;
 
 // Results (returned in rax).
 pub const OK: u64 = 0;
@@ -109,6 +110,7 @@ extern "C" fn syscall_handler(num: u64, arg: u64, arg2: u64) -> u64 {
         SYS_NETWORK => (CAP_NETWORK, b"NETWORK "),
         SYS_FILES => (crate::fs::required_cap(arg), b"FILES   "),
         SYS_LOG_READ => (CAP_AUDIT, b"AUDITLOG"),
+        SYS_WRITE => (CAP_PRINT, b"WRITE   "),
         _ => return UNKNOWN,
     };
 
@@ -131,6 +133,10 @@ extern "C" fn syscall_handler(num: u64, arg: u64, arg2: u64) -> u64 {
     put_num(8, 17, n, WHITE);
     if num == SYS_FILES {
         return crate::fs::read(crate::scheduler::current_id(), arg);
+    }
+
+    if num == SYS_WRITE {
+        return write_from_user(arg, arg2);
     }
 
     if num == SYS_LOG_READ {
@@ -217,4 +223,38 @@ static ISO_BREACHES: AtomicU64 = AtomicU64::new(0);
 
 /// Counts '?' prints from the shared-page control apps (P and Q). It SHOULD climb.
 static CONTROL_HITS: AtomicU64 = AtomicU64::new(0);
+
+
+/// SYS_WRITE: show text from the caller's own memory in the shell window.
+/// rdi = pointer, rsi = length (1..=64). The pointer is UNTRUSTED: the whole
+/// range must lie inside the caller's own two user pages. This is the first
+/// copy from user memory into the kernel.
+fn write_from_user(ptr: u64, len: u64) -> u64 {
+    let (start, end) = match crate::scheduler::current_user_region() {
+        Some(r) => r,
+        None => return DENIED,
+    };
+    let stop = match ptr.checked_add(len) {
+        Some(s) => s,
+        None => return reject(ptr),
+    };
+    if len == 0 || len > 64 || ptr < start || stop > end {
+        return reject(ptr);
+    }
+    let mut buf = [0u8; 64];
+    let n = len as usize;
+    crate::memory::with_user_access(|| {
+        for i in 0..n {
+            // SAFETY: the whole range was validated above to lie inside the
+            // caller's own mapped user pages, and we are inside the stac/clac
+            // window, so each byte read is valid.
+            buf[i] = unsafe { core::ptr::read_volatile((ptr as usize + i) as *const u8) };
+        }
+    });
+    crate::shell::program_out(crate::scheduler::current_id(), &buf[..n]);
+    OK
+}
+
+
+
 

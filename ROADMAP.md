@@ -60,7 +60,7 @@ A learning and portfolio project, not production-grade.
 ## Next phase: run your own text-mode programs (M1)
 - [x] M1a: per-process address spaces (own page tables, shared kernel half, W^X from the first mapping)
 - [x] M1b: separately built Rust user programs (flat binary, own crate); run from the shell; SYS_WRITE with validated user pointers
-- [ ] M1c: ELF loader with strict validation
+- [ ] M1c: ELF loader. M1c-1 (strict validator with a boot-time malformed-input self-test) is done; M1c-2 (load segments with their permissions) is next
 - [ ] M1d: program syscalls: write, read_line, exit (copy_from_user and copy_to_user)
 - [ ] M1e: process lifecycle: exit, free memory, run from the shell, ps, kill
 - [ ] M1f: manifest capabilities; the audit log records the SHA-256 of each program started
@@ -71,5 +71,6 @@ A learning and portfolio project, not production-grade.
 
 
 - Build note: run .\build-user.ps1 before cargo run (it creates the program binaries the kernel embeds).
+
 
 

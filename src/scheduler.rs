@@ -390,3 +390,17 @@ pub fn last_cr3() -> u64 {
     }
 }
 
+
+/// The whole user range of the running thread: its code page and its stack
+/// page. Reading from it is safe; writing is only allowed in the stack page.
+pub fn current_user_region() -> Option<(u64, u64)> {
+    let id = match SCHEDULER.try_lock() {
+        Some(guard) => guard.as_ref().map(|s| s.current)?,
+        None => return None,
+    };
+    let base = USER_BASES.get(id)?.load(Ordering::Relaxed);
+    if base == 0 {
+        return None;
+    }
+    Some((base, base + 0x2000))
+}

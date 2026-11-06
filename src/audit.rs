@@ -157,6 +157,7 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (DENY, 2) => b"NETWORK ",
         (DENY, 3) => b"FILES   ",
         (DENY, 5) => b"AUDITLOG",
+        (DENY, 6) => b"WRITE   ",
         (KILL, 14) => b"PGFAULT ",
         (KILL, 13) => b"GPFAULT ",
         (KILL, 15) => b"NXFAULT ",
@@ -428,6 +429,7 @@ pub fn copy_to_user(dst: u64, max: usize) -> usize {
         n
     })
 }
+
 
 
 

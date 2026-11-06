@@ -161,6 +161,7 @@ fn run(line: &[u8]) {
         }
         b"smaptest" => smaptest(),
         b"overflow" => overflow(),
+        b"run" => run_program(arg),
         b"export" => {
             audit::export_all();
             out(b"audit log re-sent to", GREEN);
@@ -181,7 +182,7 @@ fn run(line: &[u8]) {
 }
 
 fn help() {
-    out(b"ls  cat <file>  log  caps", WHITE);
+    out(b"ls cat log caps run <prog>", WHITE);
     out(b"grant|revoke secret", WHITE);
     out(b"tamper repair export forge", WHITE);
     out(b"smaptest overflow: halt", RED);
@@ -370,6 +371,62 @@ fn finish_grant(pass: &[u8]) {
             out(b"(logged to audit)", GRAY);
         }
     }
+}
+
+
+
+/// Programs started with `run` cannot exit or be freed yet (M1e), so only a
+/// few may be started per boot.
+static RUNS: AtomicU32 = AtomicU32::new(0);
+const MAX_RUNS: u32 = 6;
+
+fn run_program(arg: &[u8]) {
+    if arg.is_empty() {
+        out(b"usage: run <program>", GRAY);
+        out(b"programs: hello badwrite", GRAY);
+        return;
+    }
+    let p = match crate::programs::find(arg) {
+        Some(p) => p,
+        None => {
+            out(b"no such program", RED);
+            return;
+        }
+    };
+    if RUNS.fetch_add(1, Ordering::Relaxed) >= MAX_RUNS {
+        out(b"run limit reached", RED);
+        out(b"(no exit/free until M1e)", GRAY);
+        return;
+    }
+    if crate::programs::run(p) {
+        out(b"started in ring 3", CYAN);
+    } else {
+        out(b"could not start program", RED);
+    }
+}
+
+/// Output from a user program (SYS_WRITE). The prefix is chosen by the
+/// kernel, not by the program, and only printable ASCII is kept.
+pub fn program_out(tid: usize, msg: &[u8]) {
+    let mut line = [b' '; OUT_WIDTH];
+    line[0] = b't';
+    let mut i = 1;
+    if tid >= 10 {
+        line[i] = b'0' + (tid / 10 % 10) as u8;
+        i += 1;
+    }
+    line[i] = b'0' + (tid % 10) as u8;
+    i += 1;
+    line[i] = b':';
+    i += 2;
+    for &b in msg {
+        if i >= OUT_WIDTH {
+            break;
+        }
+        line[i] = if (0x20..0x7f).contains(&b) { b } else { b'.' };
+        i += 1;
+    }
+    out(&line, CYAN);
 }
 
 
