@@ -10,7 +10,7 @@ pub const MAX_SEGS: usize = 4;
 pub const MAX_PAGES: u64 = 16;
 /// The only virtual range a program may occupy.
 pub const USER_LOW: u64 = 0x5555_1000_0000;
-pub const USER_HIGH: u64 = 0x5555_1100_0000;
+pub const USER_HIGH: u64 = 0x5555_100F_0000;
 
 pub const PF_X: u32 = 1;
 pub const PF_W: u32 = 2;
@@ -412,3 +412,4 @@ pub fn self_test() {
     line[25] = b'0' + (executed % 10) as u8;
     show(crate::CYAN, &line);
 }
+
