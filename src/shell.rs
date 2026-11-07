@@ -383,7 +383,8 @@ const MAX_RUNS: u32 = 6;
 fn run_program(arg: &[u8]) {
     if arg.is_empty() {
         out(b"usage: run <program>", GRAY);
-        out(b"programs: hello badwrite", GRAY);
+        out(b"hello badwrite helloelf", GRAY);
+        out(b"data rotest nxtest", GRAY);
         return;
     }
     let p = match crate::programs::find(arg) {
@@ -429,4 +430,11 @@ pub fn program_out(tid: usize, msg: &[u8]) {
     out(&line, CYAN);
 }
 
+
+
+/// Report why a program could not be started.
+pub fn note_error(msg: &[u8]) {
+    out(b"program rejected:", RED);
+    out(msg, RED);
+}
 

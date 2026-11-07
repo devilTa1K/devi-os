@@ -410,3 +410,19 @@ pub fn map_shared_in(p4_phys: u64, addr: u64) -> bool {
     }
 }
 
+
+impl BootInfoFrameAllocator {
+    /// How many usable frames have not been handed out yet.
+    pub fn remaining(&self) -> usize {
+        self.usable_frames().count().saturating_sub(self.next)
+    }
+}
+
+/// How many usable physical frames are still unallocated.
+pub fn frames_free() -> usize {
+    let guard = MANAGER.lock();
+    match guard.as_ref() {
+        Some(m) => m.frames.remaining(),
+        None => 0,
+    }
+}

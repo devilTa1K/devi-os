@@ -35,13 +35,15 @@ fn idle() -> ! {
     }
 }
 
-#[cfg(not(feature = "bad"))]
+// ---- hello (the default program) ----
+#[cfg(not(any(feature = "bad", feature = "data", feature = "rotest", feature = "nxtest")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     write(b"Hello from Rust!");
     idle()
 }
 
+// ---- badwrite: five bad pointers, all must be refused ----
 #[cfg(feature = "bad")]
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
@@ -71,6 +73,76 @@ pub extern "C" fn _start() -> ! {
     } else {
         write(b"KERNEL ACCEPTED BAD PTR");
     }
+    idle()
+}
+
+// ---- data: an initialized global (.data) and a zeroed one (.bss) ----
+#[cfg(feature = "data")]
+static mut COUNTER: u64 = 5;
+#[cfg(feature = "data")]
+static mut ZEROED: [u64; 4] = [0; 4];
+
+#[cfg(feature = "data")]
+#[unsafe(no_mangle)]
+pub extern "C" fn _start() -> ! {
+    // SAFETY: this program is single-threaded and uses these statics only here.
+    let ok = unsafe {
+        let c = &raw mut COUNTER;
+        let z = &raw mut ZEROED as *mut u64;
+        // The initial value must have come from the file.
+        let mut good = core::ptr::read_volatile(c) == 5;
+        // The bss must start out zeroed.
+        for i in 0..4 {
+            if core::ptr::read_volatile(z.add(i)) != 0 {
+                good = false;
+            }
+        }
+        // Both must be writable.
+        core::ptr::write_volatile(c, 6);
+        core::ptr::write_volatile(z, 7);
+        good && core::ptr::read_volatile(c) == 6 && core::ptr::read_volatile(z) == 7
+    };
+    if ok {
+        write(b"data+bss ok, writable");
+    } else {
+        write(b"DATA SEGMENT WRONG");
+    }
+    idle()
+}
+
+// ---- rotest: write to read-only constants; the kernel should kill it ----
+#[cfg(feature = "rotest")]
+static CONSTANT: [u8; 16] = *b"constant data..!";
+
+#[cfg(feature = "rotest")]
+#[unsafe(no_mangle)]
+pub extern "C" fn _start() -> ! {
+    write(b"writing to rodata");
+    // SAFETY: deliberate. CONSTANT lives in the read-only segment, so the CPU
+    // should refuse this write and the kernel should kill this program.
+    unsafe {
+        core::ptr::write_volatile(CONSTANT.as_ptr() as *mut u8, b'X');
+    }
+    write(b"ROTEST NOT KILLED");
+    idle()
+}
+
+// ---- nxtest: jump into the data segment; the kernel should kill it ----
+#[cfg(feature = "nxtest")]
+static mut CODE: [u8; 16] = [0xC3; 16];
+
+#[cfg(feature = "nxtest")]
+#[unsafe(no_mangle)]
+pub extern "C" fn _start() -> ! {
+    write(b"jumping into data");
+    // SAFETY: deliberate. CODE sits in the writable, non-executable data
+    // segment, so the CPU should refuse to run it and the kernel should kill
+    // this program.
+    unsafe {
+        let f: extern "C" fn() = core::mem::transmute((&raw const CODE) as usize);
+        f();
+    }
+    write(b"NXTEST NOT KILLED");
     idle()
 }
 

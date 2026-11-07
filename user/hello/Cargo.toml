@@ -5,6 +5,9 @@ edition = "2021"
 
 [features]
 bad = []
+data = []
+rotest = []
+nxtest = []
 
 [profile.release]
 panic = "abort"

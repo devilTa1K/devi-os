@@ -49,7 +49,7 @@ function Build-One($name, $features, $ldName, $makeBin) {
     } else {
         $len = (Get-Item $elf).Length
         Write-Host "$name.elf: $len bytes"
-        & $readobj --program-headers $elf | Select-String "Type:|Flags|VirtualAddress:|MemSize:" | Out-Host
+        & $readobj --program-headers $elf | Select-String "Type:|Flags|VirtualAddress:|FileSize:|MemSize:" | Out-Host
     }
     return $true
 }
@@ -57,8 +57,14 @@ function Build-One($name, $features, $ldName, $makeBin) {
 $ok1 = Build-One "hello" $null "link.ld" $true
 $ok2 = Build-One "badwrite" "bad" "link.ld" $true
 $ok3 = Build-One "hello_seg" $null "link-elf.ld" $false
-if ($ok1 -eq $true -and $ok2 -eq $true -and $ok3 -eq $true) {
+$ok4 = Build-One "data" "data" "link-elf.ld" $false
+$ok5 = Build-One "rotest" "rotest" "link-elf.ld" $false
+$ok6 = Build-One "nxtest" "nxtest" "link-elf.ld" $false
+if ($ok1 -eq $true -and $ok2 -eq $true -and $ok3 -eq $true -and $ok4 -eq $true -and $ok5 -eq $true -and $ok6 -eq $true) {
     Write-Host "All three programs built."
 } else {
     Write-Host "At least one program failed. Send me the output above."
 }
+
+
+

@@ -136,11 +136,11 @@ extern "C" fn syscall_handler(num: u64, arg: u64, arg2: u64) -> u64 {
     }
 
     if num == SYS_WRITE {
-        return write_from_user(arg, arg2);
+        return write_from_user2(arg, arg2);
     }
 
     if num == SYS_LOG_READ {
-        return log_read(arg, arg2);
+        return log_read2(arg, arg2);
     }
 
     if num == SYS_PRINT {
@@ -256,5 +256,41 @@ fn write_from_user(ptr: u64, len: u64) -> u64 {
 }
 
 
+
+
+
+/// SYS_LOG_READ, checked against the thread's registered ranges: the buffer
+/// must lie entirely inside one WRITABLE range that belongs to the caller.
+fn log_read2(ptr: u64, len: u64) -> u64 {
+    let rec = crate::audit::REC_SIZE as u64;
+    if len < rec || len > 4096 || !crate::scheduler::user_range_ok(ptr, len, true) {
+        return reject(ptr);
+    }
+    let copied = crate::audit::copy_to_user(ptr, (len / rec) as usize) as u64;
+    let ok = LOG_READS_OK.fetch_add(1, Ordering::Relaxed) + 1;
+    put_num(7, 14, ok, WHITE);
+    put_str(7, 2, b"Log reads ok:", GRAY);
+    copied
+}
+
+/// SYS_WRITE, checked against the thread's registered ranges: the source must
+/// lie entirely inside one range that belongs to the caller (readable is enough).
+fn write_from_user2(ptr: u64, len: u64) -> u64 {
+    if len == 0 || len > 64 || !crate::scheduler::user_range_ok(ptr, len, false) {
+        return reject(ptr);
+    }
+    let mut buf = [0u8; 64];
+    let n = len as usize;
+    crate::memory::with_user_access(|| {
+        for i in 0..n {
+            // SAFETY: the whole range was validated above to lie inside one of
+            // the caller's own registered (mapped) ranges, and we are inside
+            // the stac/clac window, so each byte read is valid.
+            buf[i] = unsafe { core::ptr::read_volatile((ptr as usize + i) as *const u8) };
+        }
+    });
+    crate::shell::program_out(crate::scheduler::current_id(), &buf[..n]);
+    OK
+}
 
 

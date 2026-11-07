@@ -370,6 +370,8 @@ pub fn spawn_isolated_at(start: usize, end: usize, caps: u32, base: u64) -> bool
             });
             let idx = s.threads.len() - 1;
             crate::audit::record(crate::audit::START, idx as u8, caps as u64);
+            register_range(idx, 0, base, base + 0x1000, false);
+            register_range(idx, 1, base + 0x1000, base + 0x2000, true);
             if let Some(slot) = USER_BASES.get(idx) {
                 slot.store(base, Ordering::Relaxed);
             }
@@ -404,3 +406,105 @@ pub fn current_user_region() -> Option<(u64, u64)> {
     }
     Some((base, base + 0x2000))
 }
+
+const MAX_THREADS: usize = 32;
+const MAX_RANGES: usize = 6;
+/// Per thread, up to MAX_RANGES user ranges, each stored as three values:
+/// start, end, and whether the range is writable.
+static RANGES: [AtomicU64; MAX_THREADS * MAX_RANGES * 3] =
+    [const { AtomicU64::new(0) }; MAX_THREADS * MAX_RANGES * 3];
+
+fn register_range(tid: usize, k: usize, start: u64, end: u64, writable: bool) {
+    if tid >= MAX_THREADS || k >= MAX_RANGES {
+        return;
+    }
+    let b = (tid * MAX_RANGES + k) * 3;
+    RANGES[b].store(start, Ordering::Relaxed);
+    RANGES[b + 1].store(end, Ordering::Relaxed);
+    RANGES[b + 2].store(writable as u64, Ordering::Relaxed);
+}
+
+/// True if [ptr, ptr + len) lies ENTIRELY inside ONE range that belongs to the
+/// running thread, and that range is writable when `need_write` is set. Any
+/// overflow, empty range, unknown thread, or busy scheduler gives false.
+pub fn user_range_ok(ptr: u64, len: u64, need_write: bool) -> bool {
+    let tid = match SCHEDULER.try_lock() {
+        Some(guard) => match guard.as_ref() {
+            Some(s) => s.current,
+            None => return false,
+        },
+        None => return false,
+    };
+    if tid >= MAX_THREADS || len == 0 {
+        return false;
+    }
+    let stop = match ptr.checked_add(len) {
+        Some(s) => s,
+        None => return false,
+    };
+    for k in 0..MAX_RANGES {
+        let b = (tid * MAX_RANGES + k) * 3;
+        let s = RANGES[b].load(Ordering::Relaxed);
+        let e = RANGES[b + 1].load(Ordering::Relaxed);
+        let w = RANGES[b + 2].load(Ordering::Relaxed) != 0;
+        if e == 0 {
+            continue;
+        }
+        if ptr >= s && stop <= e && (!need_write || w) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Start a thread in an address space that has already been built: enter ring 3
+/// at `entry` with the stack pointer at `user_sp`, and record its ranges.
+pub fn spawn_prepared(
+    cr3: u64,
+    entry: u64,
+    user_sp: u64,
+    caps: u32,
+    ranges: &[(u64, u64, bool)],
+) -> bool {
+    let (kstack, top) = new_guarded_stack();
+    let frame = top - 40;
+    let regs = frame - 15 * 8;
+
+    // SAFETY: both ranges lie inside the kernel stack we just allocated. We
+    // build a frame that makes the first iretq enter ring 3 at `entry`.
+    unsafe {
+        let r = regs as *mut u64;
+        for i in 0..15 {
+            r.add(i).write(0);
+        }
+        let f = frame as *mut u64;
+        f.add(0).write(entry);
+        f.add(1).write(crate::gdt::user_code_selector() as u64);
+        f.add(2).write(0x202);
+        f.add(3).write(user_sp);
+        f.add(4).write(crate::gdt::user_data_selector() as u64);
+    }
+
+    interrupts::without_interrupts(|| {
+        if let Some(s) = SCHEDULER.lock().as_mut() {
+            s.threads.push(Thread {
+                rsp: regs,
+                caps,
+                filter: crate::syscall::FILTER_ALL,
+                cr3,
+                kstack_top: top,
+                dead: false,
+                _stack: kstack,
+            });
+            let idx = s.threads.len() - 1;
+            crate::audit::record(crate::audit::START, idx as u8, caps as u64);
+            register_range(idx, 0, base, base + 0x1000, false);
+            register_range(idx, 1, base + 0x1000, base + 0x2000, true);
+            for (k, r) in ranges.iter().enumerate() {
+                register_range(idx, k, r.0, r.1, r.2);
+            }
+        }
+    });
+    true
+}
+
