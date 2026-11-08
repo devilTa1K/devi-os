@@ -498,8 +498,6 @@ pub fn spawn_prepared(
             });
             let idx = s.threads.len() - 1;
             crate::audit::record(crate::audit::START, idx as u8, caps as u64);
-            register_range(idx, 0, base, base + 0x1000, false);
-            register_range(idx, 1, base + 0x1000, base + 0x2000, true);
             for (k, r) in ranges.iter().enumerate() {
                 register_range(idx, k, r.0, r.1, r.2);
             }
@@ -507,4 +505,5 @@ pub fn spawn_prepared(
     });
     true
 }
+
 
