@@ -24,7 +24,7 @@ SECTIONS
         *(.data .data.*)
     } :data
 
-    .bss : {
+    .bss : ALIGN(4096) {
         *(.bss .bss.*)
         *(COMMON)
     } :data
@@ -35,3 +35,4 @@ SECTIONS
         *(.note*)
     }
 }
+

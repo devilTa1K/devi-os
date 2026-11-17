@@ -15,7 +15,7 @@ function Who($t) {
     return "Thread $k"
 }
 function CallName($n) {
-    switch ([int]$n) { 1 { "PRINT" } 2 { "NETWORK" } 3 { "FILES" } 5 { "AUDIT_READ" } default { "unknown call $n" } }
+    switch ([int]$n) { 1 { "PRINT" } 2 { "NETWORK" } 3 { "FILES" } 5 { "AUDIT_READ" } 8 { "INPUT" } default { "unknown call $n" } }
 }
 function CapList($bits) {
     $b = [int64]$bits
@@ -225,6 +225,7 @@ if (-not $any) { "- Nothing unusual in this log." }
 "- A refused FILES call does not say which file was requested."
 "- Names such as App A are demo labels in this script, not read from the log."
 "- This is a rule-based summary of the log. It cannot tell an attack from a bug."
+
 
 
 
