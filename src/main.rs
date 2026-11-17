@@ -17,6 +17,7 @@ mod allocator;
 mod gdt;
 mod elf;
 mod loader;
+mod input;
 mod interrupts;
 mod memory;
 mod scheduler;
@@ -325,6 +326,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut executor = task::executor::Executor::new();
     
     shell::init();
+    input::init();
     executor.spawn(task::Task::new(task::keyboard::print_keypresses()));
     executor.run()
 }
@@ -333,6 +335,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
+
 
 
 

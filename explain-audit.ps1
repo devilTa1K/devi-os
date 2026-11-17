@@ -25,6 +25,7 @@ function CapList($bits) {
     if ($b -band 4) { $l += "FILES" }
     if ($b -band 8) { $l += "SECRET" }
     if ($b -band 16) { $l += "AUDIT_READ" }
+    if ($b -band 32) { $l += "INPUT" }
     if ($l.Count -eq 0) { return "no capabilities" }
     return ($l -join ", ")
 }
@@ -52,6 +53,9 @@ $threadCaps = @{ 0 = 4 }   # the console shell starts with FILES (assumed from t
 $lastFilter = @{}
 
 function DenySentence($e) {
+    if ([int]$e.Arg -eq 8) {
+        return ((Who $e.Thread) + " asked for the keyboard and was refused: it lacks the INPUT capability, it is not the foreground program, or the shell owns the keyboard.")
+    }
     $who = Who $e.Thread
     $call = CallName $e.Arg
     $held = 0
@@ -221,6 +225,8 @@ if (-not $any) { "- Nothing unusual in this log." }
 "- A refused FILES call does not say which file was requested."
 "- Names such as App A are demo labels in this script, not read from the log."
 "- This is a rule-based summary of the log. It cannot tell an attack from a bug."
+
+
 
 
 

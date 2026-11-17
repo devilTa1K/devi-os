@@ -36,7 +36,7 @@ fn idle() -> ! {
 }
 
 // ---- hello (the default program) ----
-#[cfg(not(any(feature = "bad", feature = "data", feature = "rotest", feature = "nxtest", feature = "exittest")))]
+#[cfg(not(any(feature = "bad", feature = "data", feature = "rotest", feature = "nxtest", feature = "exittest", feature = "echo", feature = "snoop")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     write(b"Hello from Rust!");
@@ -178,6 +178,103 @@ pub extern "C" fn _start() -> ! {
     exit(42);
     // Control must never get here after a successful exit.
     write(b"EXIT RETURNED");
+    idle()
+}
+
+
+// ---- echo and snoop: programs that ask for a typed line ----
+#[cfg(any(feature = "echo", feature = "snoop"))]
+const SYS_READ_LINE: u64 = 8;
+#[cfg(any(feature = "echo", feature = "snoop"))]
+const BUSY: u64 = u64::MAX - 4;
+#[cfg(any(feature = "echo", feature = "snoop"))]
+const CANCELLED: u64 = u64::MAX - 5;
+#[cfg(any(feature = "echo", feature = "snoop"))]
+static mut LINE: [u8; 64] = [0; 64];
+
+#[cfg(any(feature = "echo", feature = "snoop"))]
+fn read_line() -> u64 {
+    let ret: u64;
+    let ptr = (&raw mut LINE) as usize as u64;
+    // SAFETY: int 0x80 enters the kernel's syscall gate, which preserves every
+    // register except rax. The buffer is this program's own static data.
+    unsafe {
+        asm!(
+            "int 0x80",
+            inout("rax") SYS_READ_LINE => ret,
+            in("rdi") ptr,
+            in("rsi") 64u64,
+            options(nostack)
+        );
+    }
+    ret
+}
+
+// echo: read two lines and print them back. Esc on the second read shows the
+// kernel taking the keyboard away and ending this program's foreground status.
+#[cfg(feature = "echo")]
+#[unsafe(no_mangle)]
+pub extern "C" fn _start() -> ! {
+    let mut lines = 0;
+    while lines < 2 {
+        let n = read_line();
+        if n == BUSY {
+            write(b"keyboard busy");
+            break;
+        }
+        if n == CANCELLED {
+            write(b"read cancelled (Esc)");
+            continue;
+        }
+        if n > 64 {
+            write(b"read error");
+            break;
+        }
+        if n == 0 {
+            write(b"(empty line)");
+        } else {
+            // SAFETY: LINE is used only by this single-threaded program, and
+            // the kernel filled its first n bytes.
+            let s = unsafe { core::slice::from_raw_parts((&raw const LINE) as *const u8, n as usize) };
+            write(s);
+        }
+        lines += 1;
+    }
+    idle()
+}
+
+#[cfg(feature = "snoop")]
+fn spin(n: u64) {
+    let mut i = 0u64;
+    while i < n {
+        i = core::hint::black_box(i) + 1;
+    }
+}
+
+// snoop: waits about half a minute, then keeps asking for the keyboard. While
+// the shell is in passphrase mode, every request must be refused.
+#[cfg(feature = "snoop")]
+#[unsafe(no_mangle)]
+pub extern "C" fn _start() -> ! {
+    spin(1_200_000_000);
+    let mut attempts = 0;
+    while attempts < 12 {
+        let n = read_line();
+        if n == BUSY {
+            write(b"snoop: refused");
+        } else if n == CANCELLED {
+            write(b"snoop: cancelled");
+            break;
+        } else if n <= 64 {
+            write(b"snoop: got a line");
+            break;
+        } else {
+            write(b"snoop: error");
+            break;
+        }
+        attempts += 1;
+        spin(180_000_000);
+    }
     idle()
 }
 

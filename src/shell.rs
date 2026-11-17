@@ -84,6 +84,9 @@ pub fn init() {
 
 /// Called by the keyboard task for every decoded character.
 pub fn handle_char(c: char) {
+    if crate::input::handle(c) {
+        return;
+    }
     match c {
         '\n' => {
             let (line, len) = {
@@ -95,6 +98,7 @@ pub fn handle_char(c: char) {
             };
             draw_input(&[0u8; MAX], 0);
             if AWAITING.swap(false, Ordering::Relaxed) {
+                crate::input::leave_passphrase();
                 finish_grant(&line[..len]);
             } else {
                 run(&line[..len]);
@@ -340,6 +344,10 @@ fn begin_grant() {
         out(b"(about 30 s after 3 fails)", GRAY);
         return;
     }
+    if !crate::input::enter_passphrase() {
+        out(b"keyboard busy", RED);
+        return;
+    }
     AWAITING.store(true, Ordering::Relaxed);
     out(b"enter passphrase + Enter", CYAN);
     out(b"(masked, empty = cancel)", GRAY);
@@ -385,6 +393,7 @@ fn run_program(arg: &[u8]) {
         out(b"usage: run <program>", GRAY);
         out(b"hello badwrite helloelf", GRAY);
         out(b"data rotest nxtest exittest", GRAY);
+        out(b"echo snoop", GRAY);
         return;
     }
     let p = match crate::programs::find(arg) {
@@ -401,6 +410,7 @@ fn run_program(arg: &[u8]) {
     }
     if crate::programs::run(p) {
         out(b"started in ring 3", CYAN);
+        crate::input::set_foreground(crate::scheduler::last_thread_id());
     } else {
         out(b"could not start program", RED);
     }
@@ -437,5 +447,16 @@ pub fn note_error(msg: &[u8]) {
     out(b"program rejected:", RED);
     out(msg, RED);
 }
+
+
+
+/// Redraw the shell's own input line (used when the keyboard returns to it).
+pub fn redraw_input() {
+    let g = INPUT.lock();
+    draw_input(&g.0, g.1);
+}
+
+
+
 
 

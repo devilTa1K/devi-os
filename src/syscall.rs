@@ -7,6 +7,7 @@ pub const CAP_NETWORK: u32 = 1 << 1;
 pub const CAP_FILES: u32 = 1 << 2;
 pub const CAP_SECRET: u32 = 1 << 3;
 pub const CAP_AUDIT: u32 = 1 << 4;
+pub const CAP_INPUT: u32 = 1 << 5;
 pub const CAP_ALL: u32 = u32::MAX;
 
 // Syscall numbers (in rax). The argument goes in rdi.
@@ -17,9 +18,10 @@ pub const SYS_SANDBOX: u64 = 4;
 pub const SYS_LOG_READ: u64 = 5;
 pub const SYS_WRITE: u64 = 6;
 pub const SYS_EXIT: u64 = 7;
+pub const SYS_READ_LINE: u64 = 8;
 
 /// Every call a thread may make by default: one bit per call number (1..4).
-pub const FILTER_ALL: u32 = 0b1111_1110;
+pub const FILTER_ALL: u32 = 0b1_1111_1110;
 
 // Results (returned in rax).
 pub const OK: u64 = 0;
@@ -116,6 +118,7 @@ extern "C" fn syscall_handler(num: u64, arg: u64, arg2: u64) -> u64 {
         SYS_FILES => (crate::fs::required_cap(arg), b"FILES   "),
         SYS_LOG_READ => (CAP_AUDIT, b"AUDITLOG"),
         SYS_WRITE => (CAP_PRINT, b"WRITE   "),
+        SYS_READ_LINE => (CAP_INPUT, b"INPUT   "),
         _ => return UNKNOWN,
     };
 
@@ -138,6 +141,10 @@ extern "C" fn syscall_handler(num: u64, arg: u64, arg2: u64) -> u64 {
     put_num(8, 17, n, WHITE);
     if num == SYS_FILES {
         return crate::fs::read(crate::scheduler::current_id(), arg);
+    }
+
+    if num == SYS_READ_LINE {
+        return read_line_call(arg, arg2);
     }
 
     if num == SYS_WRITE {
@@ -296,6 +303,64 @@ fn write_from_user2(ptr: u64, len: u64) -> u64 {
     });
     crate::shell::program_out(crate::scheduler::current_id(), &buf[..n]);
     OK
+}
+
+
+
+
+
+
+pub const BUSY: u64 = u64::MAX - 4;
+pub const CANCELLED: u64 = u64::MAX - 5;
+
+/// SYS_READ_LINE: wait for a typed line and copy it into the caller's own
+/// writable buffer. rdi = pointer, rsi = capacity (1..=64). The pointer is
+/// UNTRUSTED: it is checked before the wait and again before the copy. The
+/// kernel decides who may take the keyboard (see input.rs); a refusal returns
+/// BUSY, and Esc returns CANCELLED.
+fn read_line_call(ptr: u64, cap: u64) -> u64 {
+    if cap == 0 || cap > 64 || !crate::scheduler::user_range_ok(ptr, cap, true) {
+        return reject(ptr);
+    }
+    let tid = crate::scheduler::current_id();
+    if !crate::input::begin_read(tid) {
+        crate::audit::record_denial(tid, SYS_READ_LINE);
+        return BUSY;
+    }
+
+    // Wait for the line. Interrupts are on while waiting, so the timer keeps
+    // switching threads and the keyboard task can finish the line.
+    let mut line = [0u8; 64];
+    x86_64::instructions::interrupts::enable();
+    let result = loop {
+        if let Some(r) = crate::input::poll(tid, &mut line) {
+            break r;
+        }
+        x86_64::instructions::hlt();
+    };
+    x86_64::instructions::interrupts::disable();
+
+    match result {
+        crate::input::ReadResult::Cancelled => CANCELLED,
+        crate::input::ReadResult::Line(n) => {
+            // Never trust a check made before a wait: look again.
+            if !crate::scheduler::user_range_ok(ptr, cap, true) {
+                return reject(ptr);
+            }
+            let k = if (n as u64) < cap { n } else { cap as usize };
+            crate::memory::with_user_access(|| {
+                for i in 0..k {
+                    // SAFETY: the whole buffer was validated above to lie in
+                    // one writable range of the caller, and we are inside the
+                    // stac/clac window, so each byte write is valid.
+                    unsafe {
+                        core::ptr::write_volatile((ptr as usize + i) as *mut u8, line[i]);
+                    }
+                }
+            });
+            k as u64
+        }
+    }
 }
 
 

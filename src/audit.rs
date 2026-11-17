@@ -61,7 +61,7 @@ static LOG: Mutex<Log> = Mutex::new(Log {
 });
 
 /// Denial counters per (thread, syscall) so a flood cannot fill the log.
-static DENY_COUNTS: Mutex<[[u32; 8]; 32]> = Mutex::new([[0; 8]; 32]);
+static DENY_COUNTS: Mutex<[[u32; 16]; 32]> = Mutex::new([[0; 16]; 32]);
 
 /// hash = SHA-256(prev_hash || seq || tick || kind || thread || arg)
 fn compute(prev: &[u8; 32], seq: u64, tick: u64, kind: u8, thread: u8, arg: u64) -> [u8; 32] {
@@ -94,7 +94,7 @@ pub fn record(kind: u8, thread: u8, arg: u64) {
 /// Log a denied syscall, but only the first one per (thread, call) and then
 /// every 512th, so a flood of denials cannot push real evidence out.
 pub fn record_denial(thread: usize, call: u64) {
-    if call == 0 || call >= 8 {
+    if call == 0 || call >= 16 {
         return;
     }
     let t = if thread > 31 { 31 } else { thread };
@@ -160,6 +160,7 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (DENY, 3) => b"FILES   ",
         (DENY, 5) => b"AUDITLOG",
         (DENY, 6) => b"WRITE   ",
+        (DENY, 8) => b"INPUT   ",
         (KILL, 14) => b"PGFAULT ",
         (KILL, 13) => b"GPFAULT ",
         (KILL, 15) => b"NXFAULT ",
@@ -432,6 +433,9 @@ pub fn copy_to_user(dst: u64, max: usize) -> usize {
         n
     })
 }
+
+
+
 
 
 

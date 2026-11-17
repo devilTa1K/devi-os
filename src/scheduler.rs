@@ -507,3 +507,14 @@ pub fn spawn_prepared(
 }
 
 
+
+/// Thread number of the most recently created thread (usize::MAX if unknown).
+pub fn last_thread_id() -> usize {
+    match SCHEDULER.try_lock() {
+        Some(guard) => guard
+            .as_ref()
+            .map(|s| s.threads.len().saturating_sub(1))
+            .unwrap_or(usize::MAX),
+        None => usize::MAX,
+    }
+}

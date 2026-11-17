@@ -14,7 +14,9 @@ pub struct Program {
 /// Where flat binaries are loaded. It must match user/hello/link.ld.
 pub const PROGRAM_BASE: u64 = 0x5555_1000_0000;
 
-pub static PROGRAMS: [Program; 7] = [
+pub static PROGRAMS: [Program; 9] = [
+    Program { name: b"echo", image: include_bytes!("../user/hello/echo.elf"), caps: crate::syscall::CAP_PRINT | crate::syscall::CAP_INPUT, elf: true },
+    Program { name: b"snoop", image: include_bytes!("../user/hello/snoop.elf"), caps: crate::syscall::CAP_PRINT | crate::syscall::CAP_INPUT, elf: true },
     Program { name: b"exittest", image: include_bytes!("../user/hello/exittest.elf"), caps: crate::syscall::CAP_PRINT, elf: true },
     Program {
         name: b"hello",
@@ -73,4 +75,5 @@ pub fn run(p: &Program) -> bool {
     let end = start + p.image.len();
     crate::scheduler::spawn_isolated_at(start, end, p.caps, PROGRAM_BASE)
 }
+
 
