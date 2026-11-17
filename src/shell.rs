@@ -384,7 +384,7 @@ fn run_program(arg: &[u8]) {
     if arg.is_empty() {
         out(b"usage: run <program>", GRAY);
         out(b"hello badwrite helloelf", GRAY);
-        out(b"data rotest nxtest", GRAY);
+        out(b"data rotest nxtest exittest", GRAY);
         return;
     }
     let p = match crate::programs::find(arg) {
@@ -437,4 +437,5 @@ pub fn note_error(msg: &[u8]) {
     out(b"program rejected:", RED);
     out(msg, RED);
 }
+
 

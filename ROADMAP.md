@@ -61,7 +61,7 @@ A learning and portfolio project, not production-grade.
 - [x] M1a: per-process address spaces (own page tables, shared kernel half, W^X from the first mapping)
 - [x] M1b: separately built Rust user programs (flat binary, own crate); run from the shell; SYS_WRITE with validated user pointers
 - [x] M1c: ELF loader (strict validator, segment loader with W^X, per-thread range registry for syscall pointers); rotest and nxtest prove the permissions are enforced
-- [ ] M1d: program syscalls: write, read_line, exit (copy_from_user and copy_to_user)
+- [ ] M1d: write (done in M1b); exit (M1d-1, done); read_line with keyboard focus and a trusted path (M1d-2, next); audit events and regression run (M1d-3)
 - [ ] M1e: process lifecycle: exit, free memory, run from the shell, ps, kill
 - [ ] M1f: manifest capabilities; the audit log records the SHA-256 of each program started
 - [ ] M1g: a small user library and sample programs (echo, calc, notes)
@@ -71,6 +71,7 @@ A learning and portfolio project, not production-grade.
 
 
 - Build note: run .\build-user.ps1 before cargo run (it creates the program binaries the kernel embeds).
+
 
 
 

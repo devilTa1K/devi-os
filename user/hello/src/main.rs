@@ -36,7 +36,7 @@ fn idle() -> ! {
 }
 
 // ---- hello (the default program) ----
-#[cfg(not(any(feature = "bad", feature = "data", feature = "rotest", feature = "nxtest")))]
+#[cfg(not(any(feature = "bad", feature = "data", feature = "rotest", feature = "nxtest", feature = "exittest")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     write(b"Hello from Rust!");
@@ -150,3 +150,34 @@ pub extern "C" fn _start() -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     idle()
 }
+
+// ---- exittest: print, end normally with a recognizable code ----
+#[cfg(feature = "exittest")]
+const SYS_EXIT: u64 = 7;
+
+#[cfg(feature = "exittest")]
+fn exit(code: u64) -> u64 {
+    let ret: u64;
+    // SAFETY: int 0x80 enters the kernel's syscall gate. A successful exit
+    // never returns.
+    unsafe {
+        asm!(
+            "int 0x80",
+            inout("rax") SYS_EXIT => ret,
+            in("rdi") code,
+            options(nostack)
+        );
+    }
+    ret
+}
+
+#[cfg(feature = "exittest")]
+#[unsafe(no_mangle)]
+pub extern "C" fn _start() -> ! {
+    write(b"exiting now");
+    exit(42);
+    // Control must never get here after a successful exit.
+    write(b"EXIT RETURNED");
+    idle()
+}
+

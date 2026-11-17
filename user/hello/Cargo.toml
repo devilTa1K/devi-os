@@ -8,9 +8,11 @@ bad = []
 data = []
 rotest = []
 nxtest = []
+exittest = []
 
 [profile.release]
 panic = "abort"
 opt-level = "s"
 lto = true
 codegen-units = 1
+

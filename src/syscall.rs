@@ -16,9 +16,10 @@ pub const SYS_FILES: u64 = 3;
 pub const SYS_SANDBOX: u64 = 4;
 pub const SYS_LOG_READ: u64 = 5;
 pub const SYS_WRITE: u64 = 6;
+pub const SYS_EXIT: u64 = 7;
 
 /// Every call a thread may make by default: one bit per call number (1..4).
-pub const FILTER_ALL: u32 = 0b111_1110;
+pub const FILTER_ALL: u32 = 0b1111_1110;
 
 // Results (returned in rax).
 pub const OK: u64 = 0;
@@ -94,6 +95,10 @@ extern "C" fn syscall_handler(num: u64, arg: u64, arg2: u64) -> u64 {
     if num >= 32 || filter & (1u32 << num) == 0 {
         crate::interrupts::filter_kill();
     }
+    if num == SYS_EXIT {
+        return crate::interrupts::exit_thread(arg);
+    }
+
     if num == SYS_SANDBOX {
         // Keep only the calls named in `arg`. A filter can shrink, never grow.
         let tid = crate::scheduler::current_id();
@@ -292,5 +297,8 @@ fn write_from_user2(ptr: u64, len: u64) -> u64 {
     crate::shell::program_out(crate::scheduler::current_id(), &buf[..n]);
     OK
 }
+
+
+
 
 

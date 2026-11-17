@@ -250,3 +250,29 @@ pub fn filter_kill() -> ! {
         x86_64::instructions::hlt();
     }
 }
+
+// ---- M1d-1: a program ends itself with SYS_EXIT ----
+
+static EXITS: AtomicU64 = AtomicU64::new(0);
+
+/// End the running thread normally (SYS_EXIT). Unlike a kill it is not a
+/// violation. The thread is marked finished and never scheduled again; its
+/// memory is NOT freed yet (M1e). A thread that cannot exit (the kernel's own
+/// thread 0) gets DENIED back instead.
+pub fn exit_thread(code: u64) -> u64 {
+    match crate::scheduler::kill_current() {
+        Some(id) => {
+            crate::audit::record(crate::audit::EXIT, id as u8, code);
+            let n = EXITS.fetch_add(1, Ordering::Relaxed) + 1;
+            crate::put_num(24, 66, n, crate::WHITE);
+            crate::put_str(24, 62, b"Exited:", crate::GRAY);
+        }
+        None => return crate::syscall::DENIED,
+    }
+    // Let the timer interrupt preempt us; the scheduler never resumes this
+    // thread, so control never returns to user mode.
+    x86_64::instructions::interrupts::enable();
+    loop {
+        x86_64::instructions::hlt();
+    }
+}

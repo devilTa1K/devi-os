@@ -60,11 +60,14 @@ $ok3 = Build-One "hello_seg" $null "link-elf.ld" $false
 $ok4 = Build-One "data" "data" "link-elf.ld" $false
 $ok5 = Build-One "rotest" "rotest" "link-elf.ld" $false
 $ok6 = Build-One "nxtest" "nxtest" "link-elf.ld" $false
-if ($ok1 -eq $true -and $ok2 -eq $true -and $ok3 -eq $true -and $ok4 -eq $true -and $ok5 -eq $true -and $ok6 -eq $true) {
+$ok7 = Build-One "exittest" "exittest" "link-elf.ld" $false
+if ($ok1 -eq $true -and $ok2 -eq $true -and $ok3 -eq $true -and $ok4 -eq $true -and $ok5 -eq $true -and $ok6 -eq $true -and $ok7 -eq $true) {
     Write-Host "All six programs built."
 } else {
     Write-Host "At least one program failed. Send me the output above."
 }
+
+
 
 
 

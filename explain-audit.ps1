@@ -95,6 +95,7 @@ function Sentence($e) {
         7 { return SandboxSentence $e }
         8 { return "A wrong passphrase was typed at the console (failure number $($e.Arg))." }
         9 { return "$who read the secret file." }
+        11 { return "$who ended itself normally (exit code $($e.Arg))." }
         10 { return "$who passed a pointer the kernel refused (it pointed outside the thread's own buffer). Nothing was written. Pointer: $(PtrText $e.Arg)." }
         default { return "Unknown event type $($e.Kind)." }
     }
@@ -220,6 +221,7 @@ if (-not $any) { "- Nothing unusual in this log." }
 "- A refused FILES call does not say which file was requested."
 "- Names such as App A are demo labels in this script, not read from the log."
 "- This is a rule-based summary of the log. It cannot tell an attack from a bug."
+
 
 
 

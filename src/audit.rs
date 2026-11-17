@@ -16,6 +16,7 @@ pub const SANDBOX: u8 = 7;
 pub const AUTH_FAIL: u8 = 8;
 pub const READ: u8 = 9;
 pub const BADPTR: u8 = 10;
+pub const EXIT: u8 = 11;
 
 /// The log keeps the newest CAP entries (a ring). The hash chain still
 /// links every entry to the one before it.
@@ -147,6 +148,7 @@ fn kind_name(k: u8) -> &'static [u8; 5] {
         AUTH_FAIL => b"AUTHF",
         READ => b"READ ",
         BADPTR => b"BADPT",
+        EXIT => b"EXIT ",
         _ => b"???? ",
     }
 }
@@ -167,6 +169,7 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (AUTH_FAIL, _) => b"BAD PASS",
         (READ, _) => b"SECRET  ",
         (BADPTR, _) => b"BAD PTR ",
+        (EXIT, _) => b"NORMAL  ",
         (START, _) => b"RING 3  ",
         (BOOT, _) => b"        ",
         (GRANT, _) => b"SECRET  ",
@@ -429,6 +432,9 @@ pub fn copy_to_user(dst: u64, max: usize) -> usize {
         n
     })
 }
+
+
+
 
 
 
