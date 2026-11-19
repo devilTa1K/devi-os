@@ -87,6 +87,19 @@ function PtrText($a) {
     return $hex
 }
 
+function FocusSentence($e) {
+    $who = Who $e.Thread
+    switch ([int]$e.Arg) {
+        1 { return "$who took the keyboard to read one line." }
+        2 { return "The line for $who was completed and the keyboard went back to the shell." }
+        3 { return "Esc took the keyboard back from $who, cancelled its read and ended its foreground status." }
+        4 { return "Esc ended the foreground status of $who. It cannot take the keyboard again until it is started again." }
+        5 { return "The shell entered passphrase mode. No program can take the keyboard until it ends." }
+        6 { return "The shell left passphrase mode." }
+        default { return "Keyboard focus event $($e.Arg) for $who." }
+    }
+}
+
 function Sentence($e) {
     $who = Who $e.Thread
     switch ($e.Kind) {
@@ -100,6 +113,7 @@ function Sentence($e) {
         8 { return "A wrong passphrase was typed at the console (failure number $($e.Arg))." }
         9 { return "$who read the secret file." }
         11 { return "$who ended itself normally (exit code $($e.Arg))." }
+        12 { return FocusSentence $e }
         10 { return "$who passed a pointer the kernel refused (it pointed outside the thread's own buffer). Nothing was written. Pointer: $(PtrText $e.Arg)." }
         default { return "Unknown event type $($e.Kind)." }
     }
@@ -210,6 +224,17 @@ foreach ($g in ($bp | Group-Object Thread)) {
     $any = $true
     "- " + (Who ([int]$g.Name)) + " passed " + $g.Count + " pointers the kernel refused. A refused pointer is never written to."
 }
+$passOn = $false
+foreach ($e2 in $entries) {
+    if ($e2.Kind -eq 12 -and $e2.Arg -eq 5) {
+        $passOn = $true
+    } elseif ($e2.Kind -eq 12 -and $e2.Arg -eq 6) {
+        $passOn = $false
+    } elseif ($e2.Kind -eq 12 -and $e2.Arg -eq 1 -and $passOn) {
+        $any = $true
+        "- ALERT: " + (Who $e2.Thread) + " took the keyboard while the shell was in passphrase mode (entry #" + $e2.Seq + "). This must never happen."
+    }
+}
 if (-not $any) { "- Nothing unusual in this log." }
 
 
@@ -225,6 +250,9 @@ if (-not $any) { "- Nothing unusual in this log." }
 "- A refused FILES call does not say which file was requested."
 "- Names such as App A are demo labels in this script, not read from the log."
 "- This is a rule-based summary of the log. It cannot tell an attack from a bug."
+
+
+
 
 
 

@@ -17,6 +17,7 @@ pub const AUTH_FAIL: u8 = 8;
 pub const READ: u8 = 9;
 pub const BADPTR: u8 = 10;
 pub const EXIT: u8 = 11;
+pub const FOCUS: u8 = 12;
 
 /// The log keeps the newest CAP entries (a ring). The hash chain still
 /// links every entry to the one before it.
@@ -149,6 +150,7 @@ fn kind_name(k: u8) -> &'static [u8; 5] {
         READ => b"READ ",
         BADPTR => b"BADPT",
         EXIT => b"EXIT ",
+        FOCUS => b"FOCUS",
         _ => b"???? ",
     }
 }
@@ -171,6 +173,12 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (READ, _) => b"SECRET  ",
         (BADPTR, _) => b"BAD PTR ",
         (EXIT, _) => b"NORMAL  ",
+        (FOCUS, 1) => b"TAKE    ",
+        (FOCUS, 2) => b"LINE    ",
+        (FOCUS, 3) => b"ESC-TAKE",
+        (FOCUS, 4) => b"ESC-FG  ",
+        (FOCUS, 5) => b"PASS-ON ",
+        (FOCUS, 6) => b"PASS-OFF",
         (START, _) => b"RING 3  ",
         (BOOT, _) => b"        ",
         (GRANT, _) => b"SECRET  ",
@@ -433,6 +441,9 @@ pub fn copy_to_user(dst: u64, max: usize) -> usize {
         n
     })
 }
+
+
+
 
 
 

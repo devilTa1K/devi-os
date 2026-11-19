@@ -60,12 +60,20 @@ pub fn enter_passphrase() -> bool {
     let ok = OWNER
         .compare_exchange(SHELL, PASSPHRASE, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok();
+    if ok {
+        crate::audit::record(crate::audit::FOCUS, 0, 5);
+    }
     draw_indicator();
     ok
 }
 
 pub fn leave_passphrase() {
-    let _ = OWNER.compare_exchange(PASSPHRASE, SHELL, Ordering::SeqCst, Ordering::SeqCst);
+    if OWNER
+        .compare_exchange(PASSPHRASE, SHELL, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        crate::audit::record(crate::audit::FOCUS, 0, 6);
+    }
     draw_indicator();
 }
 
@@ -91,6 +99,7 @@ pub fn begin_read(tid: usize) -> bool {
         b.len = 0;
         b.state = COLLECTING;
         READER.store(tid, Ordering::SeqCst);
+        crate::audit::record(crate::audit::FOCUS, tid as u8, 1);
         true
     });
     if ok {
@@ -172,6 +181,7 @@ pub fn handle(c: char) -> bool {
     if finished {
         // One line per read: the keyboard goes back to the shell at once.
         OWNER.store(SHELL, Ordering::SeqCst);
+        crate::audit::record(crate::audit::FOCUS, owner as u8, 2);
         restore_shell_display();
         draw_indicator();
     } else {
@@ -183,7 +193,11 @@ pub fn handle(c: char) -> bool {
 
 /// Esc: always returns the keyboard to the shell and ends foreground status.
 fn escape() {
-    FOREGROUND.store(NONE, Ordering::SeqCst);
+    let fg = FOREGROUND.swap(NONE, Ordering::SeqCst);
+    let owner0 = OWNER.load(Ordering::SeqCst);
+    if fg != NONE && (owner0 == SHELL || owner0 == PASSPHRASE) {
+        crate::audit::record(crate::audit::FOCUS, fg as u8, 4);
+    }
     let owner = OWNER.load(Ordering::SeqCst);
     if owner != SHELL && owner != PASSPHRASE {
         without_interrupts(|| {
@@ -193,6 +207,7 @@ fn escape() {
             }
         });
         let _ = OWNER.compare_exchange(owner, SHELL, Ordering::SeqCst, Ordering::SeqCst);
+        crate::audit::record(crate::audit::FOCUS, owner as u8, 3);
         restore_shell_display();
     }
     draw_indicator();
@@ -280,3 +295,9 @@ fn draw_counters() {
     put_str(2, 62, b"program ", GRAY);
     put_left(2, 70, KEYS_PROG.load(Ordering::Relaxed), WHITE);
 }
+
+
+
+
+
+
