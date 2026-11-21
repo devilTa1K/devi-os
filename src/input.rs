@@ -301,3 +301,30 @@ fn draw_counters() {
 
 
 
+
+/// A thread is being ended from outside. If it is the foreground program, owns
+/// the keyboard, or is waiting for a line, give the keyboard back to the shell.
+pub fn release(tid: usize) {
+    if FOREGROUND.load(Ordering::SeqCst) == tid {
+        FOREGROUND.store(NONE, Ordering::SeqCst);
+    }
+    let mut changed = false;
+    without_interrupts(|| {
+        let b = &mut *BUF.lock();
+        if READER.load(Ordering::SeqCst) == tid {
+            READER.store(NONE, Ordering::SeqCst);
+            b.state = IDLE;
+            changed = true;
+        }
+    });
+    if OWNER
+        .compare_exchange(tid, SHELL, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        changed = true;
+    }
+    if changed {
+        restore_shell_display();
+        draw_indicator();
+    }
+}

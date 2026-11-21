@@ -46,6 +46,7 @@ function KillText($who, $cause) {
         15 { return "$who tried to run code from a data page (NX violation) and was killed." }
         16 { return "$who tried to overwrite its own read-only code (write violation) and was killed." }
         17 { return "$who called a syscall outside its filter and was killed." }
+        18 { return "$who was ended from the console (kill command)." }
         default { return "$who was killed (cause code $cause)." }
     }
 }
@@ -114,6 +115,7 @@ function Sentence($e) {
         9 { return "$who read the secret file." }
         11 { return "$who ended itself normally (exit code $($e.Arg))." }
         12 { return FocusSentence $e }
+        13 { return "$who was cleaned up: $($e.Arg) memory frames and its kernel stack were returned for reuse." }
         10 { return "$who passed a pointer the kernel refused (it pointed outside the thread's own buffer). Nothing was written. Pointer: $(PtrText $e.Arg)." }
         default { return "Unknown event type $($e.Kind)." }
     }
@@ -250,6 +252,8 @@ if (-not $any) { "- Nothing unusual in this log." }
 "- A refused FILES call does not say which file was requested."
 "- Names such as App A are demo labels in this script, not read from the log."
 "- This is a rule-based summary of the log. It cannot tell an attack from a bug."
+
+
 
 
 

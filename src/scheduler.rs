@@ -239,6 +239,9 @@ pub fn current_id() -> usize {
 /// The buffer is never freed: threads never exit, and freeing a buffer
 /// that contains an unmapped page would fault.
 fn new_guarded_stack() -> (Box<[u8]>, u64) {
+    if let Some(pair) = pool_pop() {
+        return pair;
+    }
     let len = STACK_SIZE + 3 * 4096;
     let stack = alloc::vec![0u8; len].into_boxed_slice();
     let base = stack.as_ptr() as u64;
@@ -281,7 +284,7 @@ pub fn narrow_filter(mask: u32) -> Option<u32> {
 
 
 /// One slot per thread: the base address of its user memory (0 = none).
-static USER_BASES: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
+static USER_BASES: [AtomicU64; 250] = [const { AtomicU64::new(0) }; 250];
 
 /// The only user range the running thread may hand to the kernel as a
 /// writable buffer: its own stack page. Returns (start, end).
@@ -407,7 +410,7 @@ pub fn current_user_region() -> Option<(u64, u64)> {
     Some((base, base + 0x2000))
 }
 
-const MAX_THREADS: usize = 32;
+const MAX_THREADS: usize = 250;
 const MAX_RANGES: usize = 6;
 /// Per thread, up to MAX_RANGES user ranges, each stored as three values:
 /// start, end, and whether the range is writable.
@@ -518,3 +521,199 @@ pub fn last_thread_id() -> usize {
         None => usize::MAX,
     }
 }
+
+// ---- M1e-3: reclaiming finished threads ----
+
+const STACK_BYTES: usize = STACK_SIZE + 3 * 4096;
+const HEAP_MARGIN: usize = 48 * 1024;
+const POOL_CAP: usize = 64;
+
+/// Set once a finished thread's memory has been claimed by the reaper.
+static REAPED: [core::sync::atomic::AtomicBool; MAX_THREADS] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; MAX_THREADS];
+static REAPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static REAP_FAILED: AtomicU64 = AtomicU64::new(0);
+/// Kernel stacks of finished threads, scrubbed and ready for reuse. A stack is
+/// NEVER dropped: it has an unmapped guard page inside, so giving it back to
+/// the heap allocator would make the allocator fault later.
+static STACK_POOL: Mutex<[Option<(Box<[u8]>, u64)>; POOL_CAP]> =
+    Mutex::new([const { None }; POOL_CAP]);
+
+fn pool_pop() -> Option<(Box<[u8]>, u64)> {
+    interrupts::without_interrupts(|| {
+        let mut pool = STACK_POOL.lock();
+        for slot in pool.iter_mut() {
+            if slot.is_some() {
+                return slot.take();
+            }
+        }
+        None
+    })
+}
+
+pub fn pool_len() -> usize {
+    interrupts::without_interrupts(|| STACK_POOL.lock().iter().filter(|s| s.is_some()).count())
+}
+
+/// Scrub a finished thread's kernel stack (everything except the unmapped
+/// guard page) and put it in the pool.
+fn pool_push(stack: Box<[u8]>, top: u64) {
+    let base = stack.as_ptr() as u64;
+    let len = stack.len() as u64;
+    let guard = (base + 4095) & !4095;
+    // SAFETY: [base, guard) and [guard + 4096, base + len) lie inside this
+    // block, which the reaper now owns exclusively. The guard page itself is
+    // skipped because it is unmapped.
+    unsafe {
+        core::ptr::write_bytes(base as *mut u8, 0, (guard - base) as usize);
+        core::ptr::write_bytes(
+            (guard + 4096) as *mut u8,
+            0,
+            (base + len - (guard + 4096)) as usize,
+        );
+    }
+    let mut cell = Some(stack);
+    interrupts::without_interrupts(|| {
+        let mut pool = STACK_POOL.lock();
+        for slot in pool.iter_mut() {
+            if slot.is_none() {
+                if let Some(s) = cell.take() {
+                    *slot = Some((s, top));
+                }
+                break;
+            }
+        }
+    });
+    if let Some(s) = cell {
+        // The pool is full: keep the block forever instead of dropping it.
+        core::mem::forget(s);
+    }
+}
+
+fn clear_ranges(idx: usize) {
+    for k in 0..MAX_RANGES {
+        register_range(idx, k, 0, 0, false);
+    }
+    if let Some(b) = USER_BASES.get(idx) {
+        b.store(0, Ordering::Relaxed);
+    }
+}
+
+/// Free everything a finished user thread still holds: its address space and
+/// its kernel stack. Called by the audit monitor thread, and by `stress`.
+/// A thread is claimed under the scheduler lock, so it is reaped only once.
+/// The running thread is never reaped. Returns how many threads were reaped.
+pub fn reap_pending() -> usize {
+    let mut count = 0usize;
+    loop {
+        let claim = interrupts::without_interrupts(|| {
+            let mut guard = SCHEDULER.lock();
+            let s = guard.as_mut()?;
+            let cur = s.current;
+            for idx in 1..s.threads.len() {
+                if idx == cur || idx >= MAX_THREADS {
+                    continue;
+                }
+                if REAPED[idx].load(Ordering::Relaxed) {
+                    continue;
+                }
+                let t = &mut s.threads[idx];
+                if t.dead && t.cr3 != 0 {
+                    REAPED[idx].store(true, Ordering::Relaxed);
+                    let stack = core::mem::replace(&mut t._stack, Vec::new().into_boxed_slice());
+                    return Some((idx, t.cr3, t.kstack_top, stack));
+                }
+            }
+            None
+        });
+        let (idx, cr3, top, stack) = match claim {
+            Some(c) => c,
+            None => break,
+        };
+
+        let frame = x86_64::structures::paging::PhysFrame::containing_address(
+            x86_64::PhysAddr::new(cr3),
+        );
+        let freed = match memory::destroy_address_space(frame) {
+            Ok(n) => n,
+            Err(_) => {
+                REAP_FAILED.fetch_add(1, Ordering::Relaxed);
+                0
+            }
+        };
+        clear_ranges(idx);
+        pool_push(stack, top);
+        crate::audit::record(crate::audit::REAP, idx as u8, freed as u64);
+        REAPED_TOTAL.fetch_add(1, Ordering::Relaxed);
+        count += 1;
+    }
+    count
+}
+
+pub fn is_reaped(tid: usize) -> bool {
+    tid < MAX_THREADS && REAPED[tid].load(Ordering::Relaxed)
+}
+
+pub fn reaped_total() -> u64 {
+    REAPED_TOTAL.load(Ordering::Relaxed)
+}
+
+pub fn reap_failures() -> u64 {
+    REAP_FAILED.load(Ordering::Relaxed)
+}
+
+/// (threads ever started, threads still alive)
+pub fn thread_stats() -> (usize, usize) {
+    match SCHEDULER.try_lock() {
+        Some(g) => g
+            .as_ref()
+            .map(|s| (s.threads.len(), s.threads.iter().filter(|t| !t.dead).count()))
+            .unwrap_or((0, 0)),
+        None => (0, 0),
+    }
+}
+
+/// Can another program be started? Checks for a free thread number, a kernel
+/// stack (pooled, or enough heap for a new one) and enough physical frames.
+pub fn admission() -> Result<(), &'static [u8]> {
+    let n = match SCHEDULER.try_lock() {
+        Some(g) => g.as_ref().map(|s| s.threads.len()).unwrap_or(0),
+        None => return Err(b"scheduler busy"),
+    };
+    if n >= MAX_THREADS {
+        return Err(b"no thread numbers left");
+    }
+    if pool_len() == 0 && crate::allocator::heap_free() < STACK_BYTES + HEAP_MARGIN {
+        return Err(b"out of kernel memory");
+    }
+    if crate::memory::frames_free() < 64 {
+        return Err(b"out of frames");
+    }
+    Ok(())
+}
+
+/// Console only: end another user thread. Refuses thread 0, kernel threads,
+/// the running thread and anything already dead. The thread is never scheduled
+/// again; the reaper then frees its memory.
+pub fn kill_thread(id: usize) -> bool {
+    interrupts::without_interrupts(|| {
+        let mut guard = SCHEDULER.lock();
+        let s = match guard.as_mut() {
+            Some(s) => s,
+            None => return false,
+        };
+        if id == 0 || id >= s.threads.len() || id == s.current {
+            return false;
+        }
+        let t = &mut s.threads[id];
+        if t.dead || t.cr3 == 0 {
+            return false;
+        }
+        t.dead = true;
+        t.caps = 0;
+        true
+    })
+}
+
+
+

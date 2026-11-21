@@ -18,6 +18,7 @@ pub const READ: u8 = 9;
 pub const BADPTR: u8 = 10;
 pub const EXIT: u8 = 11;
 pub const FOCUS: u8 = 12;
+pub const REAP: u8 = 13;
 
 /// The log keeps the newest CAP entries (a ring). The hash chain still
 /// links every entry to the one before it.
@@ -62,7 +63,7 @@ static LOG: Mutex<Log> = Mutex::new(Log {
 });
 
 /// Denial counters per (thread, syscall) so a flood cannot fill the log.
-static DENY_COUNTS: Mutex<[[u32; 16]; 32]> = Mutex::new([[0; 16]; 32]);
+static DENY_COUNTS: Mutex<[[u32; 16]; 256]> = Mutex::new([[0; 16]; 256]);
 
 /// hash = SHA-256(prev_hash || seq || tick || kind || thread || arg)
 fn compute(prev: &[u8; 32], seq: u64, tick: u64, kind: u8, thread: u8, arg: u64) -> [u8; 32] {
@@ -98,7 +99,7 @@ pub fn record_denial(thread: usize, call: u64) {
     if call == 0 || call >= 16 {
         return;
     }
-    let t = if thread > 31 { 31 } else { thread };
+    let t = if thread > 255 { 255 } else { thread };
     let n = interrupts::without_interrupts(|| {
         let mut counts = DENY_COUNTS.lock();
         let slot = &mut counts[t][call as usize];
@@ -151,6 +152,7 @@ fn kind_name(k: u8) -> &'static [u8; 5] {
         BADPTR => b"BADPT",
         EXIT => b"EXIT ",
         FOCUS => b"FOCUS",
+        REAP => b"REAP ",
         _ => b"???? ",
     }
 }
@@ -168,6 +170,7 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (KILL, 15) => b"NXFAULT ",
         (KILL, 16) => b"WRFAULT ",
         (KILL, 17) => b"FLTRKILL",
+        (KILL, 18) => b"CONSOLE ",
         (SANDBOX, _) => b"FILTER  ",
         (AUTH_FAIL, _) => b"BAD PASS",
         (READ, _) => b"SECRET  ",
@@ -179,6 +182,7 @@ fn arg_name(kind: u8, arg: u64) -> &'static [u8; 8] {
         (FOCUS, 4) => b"ESC-FG  ",
         (FOCUS, 5) => b"PASS-ON ",
         (FOCUS, 6) => b"PASS-OFF",
+        (REAP, _) => b"FREED   ",
         (START, _) => b"RING 3  ",
         (BOOT, _) => b"        ",
         (GRANT, _) => b"SECRET  ",
@@ -255,6 +259,9 @@ pub extern "C" fn monitor() -> ! {
     let mut n: u64 = 0;
     loop {
         n += 1;
+        if n % 200_000 == 0 {
+            crate::scheduler::reap_pending();
+        }
         if n % 3_000_000 == 0 {
             draw_panel();
         }
@@ -441,6 +448,13 @@ pub fn copy_to_user(dst: u64, max: usize) -> usize {
         n
     })
 }
+
+
+
+
+
+
+
 
 
 

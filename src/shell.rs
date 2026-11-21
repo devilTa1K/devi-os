@@ -168,6 +168,9 @@ fn run(line: &[u8]) {
         b"run" => run_program(arg),
         b"mem" => mem_command(),
         b"mem2" => mem2_command(),
+        b"kill" => kill_command(arg),
+        b"threads" => threads_command(),
+        b"stress" => stress_command(arg),
         b"loadfail" => {
             crate::loader::inject_failure(2);
             run_program(b"helloelf");
@@ -409,9 +412,9 @@ fn run_program(arg: &[u8]) {
             return;
         }
     };
-    if RUNS.fetch_add(1, Ordering::Relaxed) >= MAX_RUNS {
-        out(b"run limit reached", RED);
-        out(b"(no exit/free until M1e)", GRAY);
+    if let Err(why) = crate::scheduler::admission() {
+        out(b"cannot start program:", RED);
+        out(why, GRAY);
         return;
     }
     if crate::programs::run(p) {
@@ -512,5 +515,119 @@ fn mem2_command() {
     out(&label_num(b"spaces freed: ", crate::memory::spaces_destroyed()), WHITE);
     out(&label_num(b"teardown anomalies: ", crate::memory::teardown_anomalies()), WHITE);
     out(&label_num(b"frames lost: ", crate::loader::lost() as u64), WHITE);
+    out(&label_num(b"reap failures: ", crate::scheduler::reap_failures()), WHITE);
 }
+
+
+/// `kill <n>`: end one user program from the console.
+fn kill_command(arg: &[u8]) {
+    let mut n: usize = 0;
+    let mut ok = !arg.is_empty();
+    for &b in arg {
+        if b.is_ascii_digit() && n < 1000 {
+            n = n * 10 + (b - b'0') as usize;
+        } else {
+            ok = false;
+            break;
+        }
+    }
+    if !ok {
+        out(b"usage: kill <thread>", GRAY);
+        return;
+    }
+    if crate::scheduler::kill_thread(n) {
+        audit::record(audit::KILL, n as u8, 18);
+        crate::input::release(n);
+        out(&label_num(b"ended thread ", n as u64), WHITE);
+        out(b"(memory is reclaimed soon)", GRAY);
+    } else {
+        out(b"cannot end that thread", RED);
+        out(b"(kernel, dead or unknown)", GRAY);
+    }
+}
+
+/// `threads`: how many threads exist, how many are alive, how many were reaped.
+fn threads_command() {
+    let (total, live) = crate::scheduler::thread_stats();
+    out(&label_num(b"threads started: ", total as u64), WHITE);
+    out(&label_num(b"threads alive: ", live as u64), WHITE);
+    out(&label_num(b"reaped: ", crate::scheduler::reaped_total()), WHITE);
+    out(&label_num(b"stack pool: ", crate::scheduler::pool_len() as u64), WHITE);
+}
+
+/// `stress <program> <n>`: start a program n times, one at a time, waiting for
+/// each to end and be reaped. A leak test: use it with programs that end
+/// themselves (exittest) or are killed (rotest).
+fn stress_command(arg: &[u8]) {
+    let mut sp = arg.len();
+    for (i, &b) in arg.iter().enumerate() {
+        if b == b' ' {
+            sp = i;
+            break;
+        }
+    }
+    if sp == arg.len() {
+        out(b"usage: stress <prog> <n>", GRAY);
+        return;
+    }
+    let name = &arg[..sp];
+    let mut count: u32 = 0;
+    for &b in &arg[sp + 1..] {
+        if b.is_ascii_digit() && count < 1000 {
+            count = count * 10 + (b - b'0') as u32;
+        } else if b != b' ' {
+            out(b"usage: stress <prog> <n>", GRAY);
+            return;
+        }
+    }
+    if count == 0 || count > 200 {
+        out(b"n must be 1 to 200", GRAY);
+        return;
+    }
+    let p = match crate::programs::find(name) {
+        Some(p) => p,
+        None => {
+            out(b"no such program", RED);
+            return;
+        }
+    };
+
+    let mut done = 0u32;
+    while done < count {
+        if let Err(why) = crate::scheduler::admission() {
+            clear_output();
+            out(why, RED);
+            break;
+        }
+        if !crate::programs::run(p) {
+            clear_output();
+            out(b"start failed", RED);
+            break;
+        }
+        let tid = crate::scheduler::last_thread_id();
+        // Wait (about 80 seconds at most) for it to end and be reaped.
+        let mut waited = 0u32;
+        loop {
+            crate::scheduler::reap_pending();
+            if crate::scheduler::is_reaped(tid) {
+                break;
+            }
+            if waited > 1500 {
+                clear_output();
+                out(b"stuck: never reaped", RED);
+                out(&label_num(b"thread ", tid as u64), WHITE);
+                return;
+            }
+            x86_64::instructions::hlt();
+            waited += 1;
+        }
+        done += 1;
+    }
+    clear_output();
+    out(&label_num(b"stress cycles done: ", done as u64), WHITE);
+}
+
+
+
+
 

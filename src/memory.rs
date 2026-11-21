@@ -195,7 +195,7 @@ pub fn with_user_access<R>(f: impl FnOnce() -> R) -> R {
 // ---- Stage 9c: kernel stack guard pages ----
 use core::sync::atomic::{AtomicU64, AtomicUsize};
 
-const MAX_GUARDS: usize = 32;
+const MAX_GUARDS: usize = 64;
 static GUARDS: [AtomicU64; MAX_GUARDS] = [const { AtomicU64::new(0) }; MAX_GUARDS];
 static GUARD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -924,3 +924,4 @@ pub fn teardown_selftest() {
         }
     }
 }
+
