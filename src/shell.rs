@@ -166,6 +166,7 @@ fn run(line: &[u8]) {
         b"smaptest" => smaptest(),
         b"overflow" => overflow(),
         b"run" => run_program(arg),
+        b"mem" => mem_command(),
         b"export" => {
             audit::export_all();
             out(b"audit log re-sent to", GREEN);
@@ -459,4 +460,44 @@ pub fn redraw_input() {
 
 
 
+
+
+/// A line made of a label and a number, for the `mem` command.
+fn label_num(label: &[u8], n: u64) -> [u8; OUT_WIDTH] {
+    let mut line = [b' '; OUT_WIDTH];
+    let mut i = 0usize;
+    for &b in label {
+        if i < OUT_WIDTH {
+            line[i] = b;
+            i += 1;
+        }
+    }
+    let mut digits = [0u8; 20];
+    let mut d = digits.len();
+    let mut v = n;
+    if v == 0 {
+        d -= 1;
+        digits[d] = b'0';
+    }
+    while v > 0 {
+        d -= 1;
+        digits[d] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    for &b in &digits[d..] {
+        if i < OUT_WIDTH {
+            line[i] = b;
+            i += 1;
+        }
+    }
+    line
+}
+
+/// `mem`: where the memory stands. Used to check that nothing leaks.
+fn mem_command() {
+    out(&label_num(b"frames free: ", crate::memory::frames_free() as u64), WHITE);
+    out(&label_num(b"frames freed: ", crate::memory::frames_freed_total()), WHITE);
+    out(&label_num(b"frees refused: ", crate::memory::frees_refused()), WHITE);
+    out(&label_num(b"heap free: ", crate::allocator::heap_free() as u64), WHITE);
+}
 

@@ -45,3 +45,8 @@ pub fn init_heap(
 
 
 
+
+/// Bytes still free in the kernel heap.
+pub fn heap_free() -> usize {
+    x86_64::instructions::interrupts::without_interrupts(|| ALLOCATOR.lock().free())
+}

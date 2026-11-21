@@ -51,8 +51,12 @@ impl BootInfoFrameAllocator {
 // `next` only ever increases.
 unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
+        if let Some(f) = pop_free() {
+            return Some(f);
+        }
         let frame = self.usable_frames().nth(self.next);
         self.next += 1;
+        NEXT_MIRROR.store(self.next, Ordering::Relaxed);
         frame
     }
 }
@@ -71,6 +75,8 @@ static MANAGER: Mutex<Option<Manager>> = Mutex::new(None);
 /// Hand the mapper and frame allocator to the global manager.
 pub fn install(mapper: OffsetPageTable<'static>, frames: BootInfoFrameAllocator) {
     x86_64::instructions::interrupts::without_interrupts(|| {
+        PHYS_OFFSET.store(mapper.phys_offset().as_u64(), Ordering::Relaxed);
+        record_usable(&frames);
         *MANAGER.lock() = Some(Manager { mapper, frames });
     });
 }
@@ -414,7 +420,7 @@ pub fn map_shared_in(p4_phys: u64, addr: u64) -> bool {
 impl BootInfoFrameAllocator {
     /// How many usable frames have not been handed out yet.
     pub fn remaining(&self) -> usize {
-        self.usable_frames().count().saturating_sub(self.next)
+        total_frames(self).saturating_sub(self.next) + free_len()
     }
 }
 
@@ -426,3 +432,260 @@ pub fn frames_free() -> usize {
         None => 0,
     }
 }
+
+// ---- M1e-1: giving frames back ----
+
+const FREE_CAP: usize = 4096;
+
+struct FreeList {
+    frames: [u64; FREE_CAP],
+    n: usize,
+}
+
+static FREE: Mutex<FreeList> = Mutex::new(FreeList { frames: [0; FREE_CAP], n: 0 });
+static PHYS_OFFSET: AtomicU64 = AtomicU64::new(0);
+/// How many frames the bump allocator has handed out so far.
+static NEXT_MIRROR: AtomicUsize = AtomicUsize::new(0);
+static TOTAL_FRAMES: AtomicUsize = AtomicUsize::new(0);
+static FREED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static REFUSED: AtomicU64 = AtomicU64::new(0);
+
+const MAX_USABLE: usize = 32;
+/// Start and end of each usable memory region, copied at boot.
+static USABLE: [AtomicU64; MAX_USABLE * 2] = [const { AtomicU64::new(0) }; MAX_USABLE * 2];
+static USABLE_N: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone, Copy)]
+pub enum FreeError {
+    Invalid,
+    NeverAllocated,
+    Duplicate,
+    ListFull,
+}
+
+fn record_usable(frames: &BootInfoFrameAllocator) {
+    let mut n = 0usize;
+    for r in frames.memory_map.iter() {
+        if r.region_type == MemoryRegionType::Usable && n < MAX_USABLE {
+            USABLE[n * 2].store(r.range.start_addr(), Ordering::Relaxed);
+            USABLE[n * 2 + 1].store(r.range.end_addr(), Ordering::Relaxed);
+            n += 1;
+        }
+    }
+    USABLE_N.store(n, Ordering::Relaxed);
+}
+
+/// Position of a frame in the allocator's hand-out order, if it is usable RAM.
+fn frame_index(addr: u64) -> Option<usize> {
+    let n = USABLE_N.load(Ordering::Relaxed);
+    let mut base = 0usize;
+    for i in 0..n {
+        let s = USABLE[i * 2].load(Ordering::Relaxed);
+        let e = USABLE[i * 2 + 1].load(Ordering::Relaxed);
+        if addr >= s && addr < e {
+            return Some(base + ((addr - s) / 4096) as usize);
+        }
+        base += ((e - s) / 4096) as usize;
+    }
+    None
+}
+
+fn pop_free() -> Option<PhysFrame> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut f = FREE.lock();
+        if f.n == 0 {
+            return None;
+        }
+        let n = f.n - 1;
+        f.n = n;
+        let addr = f.frames[n];
+        Some(PhysFrame::containing_address(PhysAddr::new(addr)))
+    })
+}
+
+fn free_len() -> usize {
+    x86_64::instructions::interrupts::without_interrupts(|| FREE.lock().n)
+}
+
+fn total_frames(a: &BootInfoFrameAllocator) -> usize {
+    let t = TOTAL_FRAMES.load(Ordering::Relaxed);
+    if t != 0 {
+        return t;
+    }
+    let t = a.usable_frames().count();
+    TOTAL_FRAMES.store(t, Ordering::Relaxed);
+    t
+}
+
+/// Give a frame back to the allocator. The frame is ZEROED first, so one
+/// process's data can never appear in the next owner's memory. The frame is
+/// refused (and counted) if it is the null frame, unaligned, outside usable
+/// RAM, not yet handed out by the allocator, or already in the free list.
+pub fn free_frame(frame: PhysFrame) -> Result<(), FreeError> {
+    let addr = frame.start_address().as_u64();
+    let off = PHYS_OFFSET.load(Ordering::Relaxed);
+    let refuse = |e: FreeError| -> Result<(), FreeError> {
+        REFUSED.fetch_add(1, Ordering::Relaxed);
+        Err(e)
+    };
+    if off == 0 || addr == 0 || addr & 0xFFF != 0 {
+        return refuse(FreeError::Invalid);
+    }
+    let idx = match frame_index(addr) {
+        Some(i) => i,
+        None => return refuse(FreeError::Invalid),
+    };
+    if idx >= NEXT_MIRROR.load(Ordering::Relaxed) {
+        return refuse(FreeError::NeverAllocated);
+    }
+
+    let outcome = x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut f = FREE.lock();
+        if f.frames[..f.n].contains(&addr) {
+            return Err(FreeError::Duplicate);
+        }
+        if f.n == FREE_CAP {
+            return Err(FreeError::ListFull);
+        }
+        // Scrub before the frame can be handed out again.
+        // SAFETY: the frame is usable RAM that the allocator handed out earlier
+        // and nobody holds a reference to it any more; we write it through the
+        // kernel's window onto physical memory.
+        unsafe {
+            core::ptr::write_bytes((off + addr) as *mut u8, 0, 4096);
+        }
+        let n = f.n;
+        f.frames[n] = addr;
+        f.n = n + 1;
+        Ok(())
+    });
+    match outcome {
+        Ok(()) => {
+            FREED_TOTAL.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+        Err(e) => refuse(e),
+    }
+}
+
+pub fn frames_freed_total() -> u64 {
+    FREED_TOTAL.load(Ordering::Relaxed)
+}
+
+pub fn frees_refused() -> u64 {
+    REFUSED.load(Ordering::Relaxed)
+}
+
+fn frame_is_zero(off: VirtAddr, f: PhysFrame) -> bool {
+    // SAFETY: reads one frame through the kernel's window onto physical memory.
+    let s = unsafe {
+        core::slice::from_raw_parts((off + f.start_address().as_u64()).as_ptr::<u8>(), 4096)
+    };
+    s.iter().all(|&b| b == 0)
+}
+
+fn selftest_inner() -> Result<(), &'static str> {
+    let off = VirtAddr::new(PHYS_OFFSET.load(Ordering::Relaxed));
+    if off.as_u64() == 0 {
+        return Err("no manager");
+    }
+    let before = frames_free();
+
+    let mut got = [PhysFrame::containing_address(PhysAddr::new(0x1000)); 3];
+    {
+        let mut guard = MANAGER.lock();
+        let m = guard.as_mut().ok_or("no manager")?;
+        for i in 0..3 {
+            got[i] = m.frames.allocate_frame().ok_or("alloc")?;
+        }
+    }
+    if frames_free() + 3 != before {
+        return Err("count after alloc");
+    }
+
+    for f in got.iter() {
+        // SAFETY: the frames were just taken from the allocator, so nothing
+        // else uses them.
+        unsafe {
+            core::ptr::write_bytes((off + f.start_address().as_u64()).as_mut_ptr::<u8>(), 0xAA, 4096);
+        }
+    }
+    for f in got.iter() {
+        free_frame(*f).map_err(|_| "free refused")?;
+    }
+    if frames_free() != before {
+        return Err("count after free");
+    }
+    for f in got.iter() {
+        if !frame_is_zero(off, *f) {
+            return Err("not scrubbed");
+        }
+    }
+
+    if !matches!(free_frame(got[0]), Err(FreeError::Duplicate)) {
+        return Err("dup accepted");
+    }
+    if !matches!(
+        free_frame(PhysFrame::containing_address(PhysAddr::new(0))),
+        Err(FreeError::Invalid)
+    ) {
+        return Err("null accepted");
+    }
+    let n = USABLE_N.load(Ordering::Relaxed);
+    if n > 0 {
+        let last_end = USABLE[(n - 1) * 2 + 1].load(Ordering::Relaxed);
+        let far = PhysFrame::containing_address(PhysAddr::new(last_end - 4096));
+        if !matches!(free_frame(far), Err(FreeError::NeverAllocated)) {
+            return Err("future accepted");
+        }
+    }
+
+    let mut again = [PhysFrame::containing_address(PhysAddr::new(0x1000)); 3];
+    {
+        let mut guard = MANAGER.lock();
+        let m = guard.as_mut().ok_or("no manager")?;
+        for i in 0..3 {
+            again[i] = m.frames.allocate_frame().ok_or("realloc")?;
+        }
+    }
+    for a in again.iter() {
+        if !got.iter().any(|g| g.start_address() == a.start_address()) {
+            return Err("not reused");
+        }
+        if !frame_is_zero(off, *a) {
+            return Err("reuse dirty");
+        }
+    }
+    for a in again.iter() {
+        free_frame(*a).map_err(|_| "refree refused")?;
+    }
+    if frames_free() != before {
+        return Err("count at end");
+    }
+    Ok(())
+}
+
+/// Boot-time check of the free list. The result is shown on row 1.
+pub fn frame_selftest() {
+    let saved_freed = FREED_TOTAL.load(Ordering::Relaxed);
+    let saved_refused = REFUSED.load(Ordering::Relaxed);
+    let r = selftest_inner();
+    // The test's own frees and refusals should not show up in the counters.
+    FREED_TOTAL.store(saved_freed, Ordering::Relaxed);
+    REFUSED.store(saved_refused, Ordering::Relaxed);
+    match r {
+        Ok(()) => crate::put_str(1, 63, b"Frame check ok", crate::CYAN),
+        Err(why) => {
+            let mut line = [b' '; 17];
+            line[..5].copy_from_slice(b"FAIL ");
+            let w = why.as_bytes();
+            let k = if w.len() < 12 { w.len() } else { 12 };
+            line[5..5 + k].copy_from_slice(&w[..k]);
+            crate::put_str(1, 63, &line, crate::RED);
+        }
+    }
+}
+
+
+
+

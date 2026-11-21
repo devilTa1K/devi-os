@@ -79,3 +79,9 @@ A learning and portfolio project, not production-grade.
 
 
 
+
+## M1e: give memory back
+- [x] M1e-1: frame free list with scrubbing, refusal of bad and double frees, boot self-test, mem command
+- [ ] M1e-2: tear down a process address space (skip the shared frame); loader failure path frees what it took
+- [ ] M1e-3: reaper thread, kernel-stack pool, thread table of 250, remove the six-runs cap; leak test
+- [ ] M1e-4: regression suite and tag
