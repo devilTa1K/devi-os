@@ -281,6 +281,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     memory::install(mapper, frame_allocator);
     memory::record_kernel_p4();
     memory::frame_selftest();
+    memory::teardown_selftest();
     elf::self_test();
     loader::show_lost();
     let hardening: &[u8] = if nx {
@@ -336,6 +337,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
 
 
 

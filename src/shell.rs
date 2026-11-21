@@ -167,6 +167,11 @@ fn run(line: &[u8]) {
         b"overflow" => overflow(),
         b"run" => run_program(arg),
         b"mem" => mem_command(),
+        b"mem2" => mem2_command(),
+        b"loadfail" => {
+            crate::loader::inject_failure(2);
+            run_program(b"helloelf");
+        }
         b"export" => {
             audit::export_all();
             out(b"audit log re-sent to", GREEN);
@@ -499,5 +504,13 @@ fn mem_command() {
     out(&label_num(b"frames freed: ", crate::memory::frames_freed_total()), WHITE);
     out(&label_num(b"frees refused: ", crate::memory::frees_refused()), WHITE);
     out(&label_num(b"heap free: ", crate::allocator::heap_free() as u64), WHITE);
+}
+
+
+/// `mem2`: teardown and loader statistics.
+fn mem2_command() {
+    out(&label_num(b"spaces freed: ", crate::memory::spaces_destroyed()), WHITE);
+    out(&label_num(b"teardown anomalies: ", crate::memory::teardown_anomalies()), WHITE);
+    out(&label_num(b"frames lost: ", crate::loader::lost() as u64), WHITE);
 }
 

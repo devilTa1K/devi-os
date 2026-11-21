@@ -53,16 +53,25 @@ pub fn load(image: &[u8], caps: u32) -> Result<(), LoadError> {
     }
 
     let mut used = 0usize;
-    let result = build(image, &plan, caps, &mut used);
+    let p4 = match crate::memory::new_address_space() {
+        Some(p) => p,
+        None => return Err(LoadError::OutOfFrames),
+    };
+    let result = build(image, &plan, caps, &mut used, p4);
     if result.is_err() {
-        LOST.fetch_add(used, Ordering::Relaxed);
+        match crate::memory::destroy_address_space(p4) {
+            Ok(_) => {}
+            Err(_) => {
+                LOST.fetch_add(used, Ordering::Relaxed);
+            }
+        }
         show_lost();
     }
     result
 }
 
-fn build(image: &[u8], plan: &elf::Plan, caps: u32, used: &mut usize) -> Result<(), LoadError> {
-    let p4 = crate::memory::new_address_space().ok_or(LoadError::OutOfFrames)?;
+fn build(image: &[u8], plan: &elf::Plan, caps: u32, used: &mut usize, p4: x86_64::structures::paging::PhysFrame) -> Result<(), LoadError> {
+    // p4 is created by load(), which also tears it down if this function fails.
     *used += 1;
 
     // (start, end, writable) for every range this program owns.
@@ -74,6 +83,10 @@ fn build(image: &[u8], plan: &elf::Plan, caps: u32, used: &mut usize) -> Result<
         let writable = s.flags & PF_W != 0;
         let executable = s.flags & PF_X != 0;
         for j in 0..npages {
+            if FAIL_AFTER.load(Ordering::Relaxed) == *used {
+                FAIL_AFTER.store(usize::MAX, Ordering::Relaxed);
+                return Err(LoadError::Map);
+            }
             let page_off = (j as u64) * 4096;
             let va = s.vaddr + page_off;
             // The page is mapped with its FINAL permissions and starts zeroed.
@@ -108,3 +121,21 @@ fn build(image: &[u8], plan: &elf::Plan, caps: u32, used: &mut usize) -> Result<
         Err(LoadError::Map)
     }
 }
+
+/// Frames lost to failed loads. With teardown this should always read 0.
+pub fn lost() -> usize {
+    LOST.load(Ordering::Relaxed)
+}
+
+/// TEST HOOK (M1e-2): make the next load fail once `after` frames have been
+/// taken, to exercise the cleanup path. One shot. To be removed in M1e-4.
+pub fn inject_failure(after: usize) {
+    FAIL_AFTER.store(after, Ordering::Relaxed);
+}
+
+static FAIL_AFTER: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+
+
+
+

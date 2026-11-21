@@ -689,3 +689,238 @@ pub fn frame_selftest() {
 
 
 
+
+// ---- M1e-2: tearing down a process address space ----
+
+static TEARDOWN_ANOMALIES: AtomicU64 = AtomicU64::new(0);
+static SPACES_DESTROYED: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy)]
+pub enum TeardownError {
+    KernelTable,
+    ActiveTable,
+    NoManager,
+    NotUsable,
+    FrameRefused,
+}
+
+pub fn teardown_anomalies() -> u64 {
+    TEARDOWN_ANOMALIES.load(Ordering::Relaxed)
+}
+
+pub fn spaces_destroyed() -> u64 {
+    SPACES_DESTROYED.load(Ordering::Relaxed)
+}
+
+/// View one page-table page through the kernel's window onto physical memory.
+///
+/// SAFETY: `addr` must be the physical address of a page-table page.
+unsafe fn table_ref<'a>(off: u64, addr: u64) -> &'a PageTable {
+    unsafe { &*((off + addr) as *const PageTable) }
+}
+
+/// Free one frame that belonged to a torn-down space. Anything the free list
+/// refuses is counted as an anomaly instead of being ignored.
+fn release(addr: u64, freed: &mut usize) {
+    match PhysAddr::try_new(addr) {
+        Ok(a) => match free_frame(PhysFrame::containing_address(a)) {
+            Ok(()) => *freed += 1,
+            Err(_) => {
+                TEARDOWN_ANOMALIES.fetch_add(1, Ordering::Relaxed);
+            }
+        },
+        Err(_) => {
+            TEARDOWN_ANOMALIES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+fn free_list_contains(addr: u64) -> bool {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let f = FREE.lock();
+        f.frames[..f.n].contains(&addr)
+    })
+}
+
+/// Free every frame that belongs ONLY to this process: its data frames (except
+/// the deliberately shared frame), the page-table pages below the user slot,
+/// and the top-level table. Every other slot of the top-level table points at
+/// kernel tables shared by all address spaces; those are never entered.
+/// Returns the number of frames freed.
+pub fn destroy_address_space(p4: PhysFrame) -> Result<usize, TeardownError> {
+    let p4_addr = p4.start_address().as_u64();
+    if p4_addr == KERNEL_P4.load(Ordering::Relaxed) {
+        return Err(TeardownError::KernelTable);
+    }
+    let (active, _) = Cr3::read();
+    if active.start_address().as_u64() == p4_addr {
+        return Err(TeardownError::ActiveTable);
+    }
+    let off = PHYS_OFFSET.load(Ordering::Relaxed);
+    if off == 0 {
+        return Err(TeardownError::NoManager);
+    }
+    match frame_index(p4_addr) {
+        Some(i) if i < NEXT_MIRROR.load(Ordering::Relaxed) => {}
+        _ => return Err(TeardownError::NotUsable),
+    }
+
+    let shared = SHARED_FRAME.load(Ordering::Relaxed);
+    let mut freed = 0usize;
+
+    // SAFETY: every table below was built by new_address_space and map_user_in
+    // from frames the allocator handed out, and we read it through the kernel's
+    // window onto physical memory. A table page is freed only AFTER its entries
+    // have been visited, so we never read a page we have already scrubbed.
+    unsafe {
+        let top = table_ref(off, p4_addr);
+        let e4 = &top[USER_P4_INDEX];
+        if e4.flags().contains(PageTableFlags::PRESENT) {
+            if e4.flags().contains(PageTableFlags::HUGE_PAGE) {
+                TEARDOWN_ANOMALIES.fetch_add(1, Ordering::Relaxed);
+            } else {
+                let p3 = table_ref(off, e4.addr().as_u64());
+                for i3 in 0..512 {
+                    let e3 = &p3[i3];
+                    if !e3.flags().contains(PageTableFlags::PRESENT) {
+                        continue;
+                    }
+                    if e3.flags().contains(PageTableFlags::HUGE_PAGE) {
+                        TEARDOWN_ANOMALIES.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    let p2 = table_ref(off, e3.addr().as_u64());
+                    for i2 in 0..512 {
+                        let e2 = &p2[i2];
+                        if !e2.flags().contains(PageTableFlags::PRESENT) {
+                            continue;
+                        }
+                        if e2.flags().contains(PageTableFlags::HUGE_PAGE) {
+                            TEARDOWN_ANOMALIES.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                        let p1 = table_ref(off, e2.addr().as_u64());
+                        for i1 in 0..512 {
+                            let e1 = &p1[i1];
+                            if !e1.flags().contains(PageTableFlags::PRESENT) {
+                                continue;
+                            }
+                            let a = e1.addr().as_u64();
+                            if a != shared {
+                                release(a, &mut freed);
+                            }
+                        }
+                        release(e2.addr().as_u64(), &mut freed);
+                    }
+                    release(e3.addr().as_u64(), &mut freed);
+                }
+                release(e4.addr().as_u64(), &mut freed);
+            }
+        }
+    }
+
+    match free_frame(p4) {
+        Ok(()) => freed += 1,
+        Err(_) => return Err(TeardownError::FrameRefused),
+    }
+    SPACES_DESTROYED.fetch_add(1, Ordering::Relaxed);
+    Ok(freed)
+}
+
+fn teardown_selftest_inner() -> Result<(), &'static str> {
+    let off = VirtAddr::new(PHYS_OFFSET.load(Ordering::Relaxed));
+    if off.as_u64() == 0 || KERNEL_P4.load(Ordering::Relaxed) == 0 {
+        return Err("no manager");
+    }
+    let shared_before = SHARED_FRAME.load(Ordering::Relaxed);
+    let before = frames_free();
+
+    let p4 = new_address_space().ok_or("no space")?;
+    let p4_addr = p4.start_address().as_u64();
+
+    // Four data pages that need different page-table pages: the same table,
+    // the next table, a second directory, and a second 1 GiB region.
+    let base: u64 = 0x5555_0300_0000;
+    let addrs = [base, base + 0x1000, base + 0x20_0000, base + 0x4000_0000];
+    let mut data = [PhysFrame::containing_address(PhysAddr::new(0x1000)); 4];
+    for i in 0..4 {
+        data[i] = map_user_in(p4, addrs[i], true, false).ok_or("map")?;
+        // SAFETY: a fresh frame that only this test knows about.
+        unsafe {
+            core::ptr::write_bytes(
+                (off + data[i].start_address().as_u64()).as_mut_ptr::<u8>(),
+                0xBB,
+                4096,
+            );
+        }
+    }
+    if !map_shared_in(p4_addr, base + 0x6000_0000) {
+        return Err("share");
+    }
+    let shared = SHARED_FRAME.load(Ordering::Relaxed);
+    if shared == 0 {
+        return Err("no shared");
+    }
+
+    let freed = destroy_address_space(p4).map_err(|_| "destroy")?;
+    if freed < 9 {
+        return Err("too few");
+    }
+    // Everything came back, except the shared frame if this test created it.
+    let leftover = if shared_before == 0 { 1 } else { 0 };
+    if frames_free() + leftover != before {
+        return Err("count");
+    }
+    for f in data.iter() {
+        if !frame_is_zero(off, *f) {
+            return Err("not scrubbed");
+        }
+    }
+    if free_list_contains(shared) {
+        return Err("shared freed");
+    }
+    if TEARDOWN_ANOMALIES.load(Ordering::Relaxed) != 0 {
+        return Err("anomaly");
+    }
+
+    // The kernel's own top-level table must be refused.
+    let kp = PhysFrame::containing_address(PhysAddr::new(KERNEL_P4.load(Ordering::Relaxed)));
+    if !matches!(destroy_address_space(kp), Err(TeardownError::KernelTable)) {
+        return Err("kernel ok");
+    }
+    // Destroying the same space twice must be refused and must free nothing.
+    let c = frames_free();
+    if destroy_address_space(p4).is_ok() {
+        return Err("twice ok");
+    }
+    if frames_free() != c {
+        return Err("twice freed");
+    }
+    Ok(())
+}
+
+/// Boot-time check of teardown. The result is shown on row 13, right side.
+pub fn teardown_selftest() {
+    let s_freed = FREED_TOTAL.load(Ordering::Relaxed);
+    let s_refused = REFUSED.load(Ordering::Relaxed);
+    let s_spaces = SPACES.load(Ordering::Relaxed);
+    let s_destroyed = SPACES_DESTROYED.load(Ordering::Relaxed);
+    let r = teardown_selftest_inner();
+    // The test's own frees, refusals and spaces should not show in the counters.
+    FREED_TOTAL.store(s_freed, Ordering::Relaxed);
+    REFUSED.store(s_refused, Ordering::Relaxed);
+    SPACES.store(s_spaces, Ordering::Relaxed);
+    SPACES_DESTROYED.store(s_destroyed, Ordering::Relaxed);
+    match r {
+        Ok(()) => crate::put_str(13, 54, b"Teardown check ok", crate::CYAN),
+        Err(why) => {
+            let msg = b"TEARDOWN FAIL ";
+            let mut line = [b' '; 25];
+            line[..msg.len()].copy_from_slice(msg);
+            let w = why.as_bytes();
+            let k = if w.len() < 11 { w.len() } else { 11 };
+            line[msg.len()..msg.len() + k].copy_from_slice(&w[..k]);
+            crate::put_str(13, 54, &line, crate::RED);
+        }
+    }
+}
