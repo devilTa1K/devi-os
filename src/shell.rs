@@ -171,10 +171,7 @@ fn run(line: &[u8]) {
         b"kill" => kill_command(arg),
         b"threads" => threads_command(),
         b"stress" => stress_command(arg),
-        b"loadfail" => {
-            crate::loader::inject_failure(2);
-            run_program(b"helloelf");
-        }
+        b"leaktest" => leaktest_command(),
         b"export" => {
             audit::export_all();
             out(b"audit log re-sent to", GREEN);
@@ -629,5 +626,137 @@ fn stress_command(arg: &[u8]) {
 
 
 
+
+
+
+/// One start-and-reap cycle: start the program, then wait (about 80 seconds at
+/// most) for it to end and for its memory to be completely returned.
+fn run_cycle(p: &crate::programs::Program) -> Result<(), &'static [u8]> {
+    if let Err(why) = crate::scheduler::admission() {
+        return Err(why);
+    }
+    if !crate::programs::run(p) {
+        return Err(b"start failed");
+    }
+    let tid = crate::scheduler::last_thread_id();
+    let mut waited = 0u32;
+    loop {
+        crate::scheduler::reap_pending();
+        if crate::scheduler::is_reaped(tid) {
+            return Ok(());
+        }
+        if waited > 1500 {
+            return Err(b"never reaped");
+        }
+        x86_64::instructions::hlt();
+        waited += 1;
+    }
+}
+
+/// `leaktest`: an automatic leak test with a pass or fail verdict. It starts
+/// exittest and rotest 40 times in total and requires that physical frames,
+/// pooled kernel stacks and live threads come back EXACTLY. Heap use may drift
+/// by what the growing thread table explains (one small entry per thread ever
+/// started); a leaked kernel stack would be 28 KB, far above that.
+fn leaktest_command() {
+    clear_output();
+    if crate::interrupts::ticks() < 2700 {
+        out(b"wait: boot still settling", RED);
+        out(b"(try after tick 2700)", GRAY);
+        return;
+    }
+    let ex = match crate::programs::find(b"exittest") {
+        Some(p) => p,
+        None => {
+            out(b"exittest missing", RED);
+            return;
+        }
+    };
+    let ro = match crate::programs::find(b"rotest") {
+        Some(p) => p,
+        None => {
+            out(b"rotest missing", RED);
+            return;
+        }
+    };
+
+    // Settle, then take one warm-up cycle so a new kernel stack (if the pool
+    // was empty) is already in the pool before the baseline is taken.
+    crate::scheduler::reap_pending();
+    if let Err(why) = run_cycle(ex) {
+        clear_output();
+        out(b"warm-up failed:", RED);
+        out(why, RED);
+        return;
+    }
+
+    let f0 = crate::memory::frames_free();
+    let h0 = crate::allocator::heap_free();
+    let pool0 = crate::scheduler::pool_len();
+    let (_, alive0) = crate::scheduler::thread_stats();
+    let reaped0 = crate::scheduler::reaped_total();
+
+    const CYCLES: u64 = 40;
+    let mut cycle_error: Option<&'static [u8]> = None;
+    for i in 0..CYCLES {
+        let p = if i % 2 == 0 { ex } else { ro };
+        if let Err(why) = run_cycle(p) {
+            cycle_error = Some(why);
+            break;
+        }
+    }
+    crate::scheduler::reap_pending();
+
+    let f1 = crate::memory::frames_free();
+    let h1 = crate::allocator::heap_free();
+    let pool1 = crate::scheduler::pool_len();
+    let (_, alive1) = crate::scheduler::thread_stats();
+    let reaped1 = crate::scheduler::reaped_total();
+
+    let allowed = 16384usize + 64 * (CYCLES as usize);
+    let drift = h0.saturating_sub(h1);
+
+    let mut reason: &[u8] = b"";
+    if let Some(why) = cycle_error {
+        reason = why;
+    } else if f1 != f0 {
+        reason = b"frames";
+    } else if pool1 != pool0 {
+        reason = b"stack pool";
+    } else if alive1 != alive0 {
+        reason = b"alive count";
+    } else if reaped1 - reaped0 != CYCLES {
+        reason = b"reap count";
+    } else if drift > allowed {
+        reason = b"heap";
+    } else if crate::memory::teardown_anomalies() != 0 {
+        reason = b"anomalies";
+    } else if crate::loader::lost() != 0 {
+        reason = b"frames lost";
+    } else if crate::scheduler::reap_failures() != 0 {
+        reason = b"reap errors";
+    } else if !crate::memory::shared_frame_intact() {
+        reason = b"shared frame";
+    }
+
+    clear_output();
+    if reason.is_empty() {
+        out(b"LEAK TEST PASS (40 cycles)", GREEN);
+    } else {
+        out(b"LEAK TEST FAIL", RED);
+    }
+    out(&label_num(b"frames drift: ", f1.abs_diff(f0) as u64), WHITE);
+    out(&label_num(b"heap drift bytes: ", drift as u64), WHITE);
+    if reason.is_empty() {
+        out(b"pool, threads: exact", GRAY);
+    } else {
+        let prefix = b"fail: ";
+        let mut line = [b' '; OUT_WIDTH];
+        line[..prefix.len()].copy_from_slice(prefix);
+        let k = core::cmp::min(reason.len(), OUT_WIDTH - prefix.len());
+        line[prefix.len()..prefix.len() + k].copy_from_slice(&reason[..k]);
+        out(&line, RED);
+    }
+}
 
 

@@ -128,7 +128,8 @@ pub fn lost() -> usize {
 }
 
 /// TEST HOOK (M1e-2): make the next load fail once `after` frames have been
-/// taken, to exercise the cleanup path. One shot. To be removed in M1e-4.
+/// taken, to exercise the cleanup path. One shot. The boot self-test uses it.
+#[allow(dead_code)]
 pub fn inject_failure(after: usize) {
     FAIL_AFTER.store(after, Ordering::Relaxed);
 }
@@ -137,5 +138,35 @@ static FAIL_AFTER: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 
 
+
+
+
+/// Boot-time check of the failure path: make a real load fail after one page
+/// has been mapped, and require that every frame comes back and nothing is
+/// counted as lost. The result is shown on row 21, right side.
+pub fn selftest() {
+    let p = match crate::programs::find(b"helloelf") {
+        Some(p) => p,
+        None => return,
+    };
+    let saved = crate::memory::save_counters();
+    let before = crate::memory::frames_free();
+    let lost_before = LOST.load(Ordering::Relaxed);
+
+    FAIL_AFTER.store(2, Ordering::Relaxed);
+    let result = load(p.image, p.caps);
+    FAIL_AFTER.store(usize::MAX, Ordering::Relaxed);
+
+    let after = crate::memory::frames_free();
+    let ok = matches!(result, Err(LoadError::Map))
+        && after == before
+        && LOST.load(Ordering::Relaxed) == lost_before;
+    crate::memory::restore_counters(saved);
+    if ok {
+        crate::put_str(21, 59, b"Loader fail-path ok", crate::CYAN);
+    } else {
+        crate::put_str(21, 59, b"LOADER FAIL-PATH BAD", crate::RED);
+    }
+}
 
 

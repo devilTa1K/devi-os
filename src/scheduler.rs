@@ -645,13 +645,14 @@ pub fn reap_pending() -> usize {
         pool_push(stack, top);
         crate::audit::record(crate::audit::REAP, idx as u8, freed as u64);
         REAPED_TOTAL.fetch_add(1, Ordering::Relaxed);
+        REAP_DONE[idx].store(true, Ordering::Relaxed);
         count += 1;
     }
     count
 }
 
 pub fn is_reaped(tid: usize) -> bool {
-    tid < MAX_THREADS && REAPED[tid].load(Ordering::Relaxed)
+    tid < MAX_THREADS && REAP_DONE[tid].load(Ordering::Relaxed)
 }
 
 pub fn reaped_total() -> u64 {
@@ -715,5 +716,12 @@ pub fn kill_thread(id: usize) -> bool {
     })
 }
 
+
+
+
+/// Set once a finished thread's memory has been completely returned. (REAPED
+/// only says that a reaper has claimed the thread.)
+static REAP_DONE: [core::sync::atomic::AtomicBool; MAX_THREADS] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; MAX_THREADS];
 
 

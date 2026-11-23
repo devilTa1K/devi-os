@@ -925,3 +925,28 @@ pub fn teardown_selftest() {
     }
 }
 
+
+// ---- M1e-4: helpers for the tests ----
+
+/// (frames freed, frees refused, spaces created, spaces destroyed)
+pub fn save_counters() -> (u64, u64, usize, u64) {
+    (
+        FREED_TOTAL.load(Ordering::Relaxed),
+        REFUSED.load(Ordering::Relaxed),
+        SPACES.load(Ordering::Relaxed),
+        SPACES_DESTROYED.load(Ordering::Relaxed),
+    )
+}
+
+pub fn restore_counters(c: (u64, u64, usize, u64)) {
+    FREED_TOTAL.store(c.0, Ordering::Relaxed);
+    REFUSED.store(c.1, Ordering::Relaxed);
+    SPACES.store(c.2, Ordering::Relaxed);
+    SPACES_DESTROYED.store(c.3, Ordering::Relaxed);
+}
+
+/// True if the deliberately shared frame has NOT been given back to the allocator.
+pub fn shared_frame_intact() -> bool {
+    let s = SHARED_FRAME.load(Ordering::Relaxed);
+    s == 0 || !free_list_contains(s)
+}
